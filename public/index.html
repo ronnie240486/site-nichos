@@ -521,7 +521,7 @@
             name: "📈 Estratégia e Monetização",
             tools: [
                  { name: 'Bio de Canal', func: 'executeGenericTool', desc: 'Cria uma descrição profissional e cativante para a página "Sobre" do seu canal.', prompt: 'Escreva uma biografia profissional e otimizada para a aba "Sobre" de um canal do YouTube com o nicho "{{input}}". A bio deve apresentar o canal, o tipo de conteúdo e a frequência de postagem.' },
-                 { name: 'Nome para Canal', func: 'executeGenericTool', desc: 'Gera ideias de nomes criativos e disponíveis para o seu novo canal no YouTube.', prompt: 'Gere 10 ideias de nomes criativos e únicos para um canal no YouTube sobre "{{input}}". Verifique se os nomes são fáceis de lembrar e pronunciar.' },
+                 { name: 'Nome para Canal', func: 'executeGenericTool', desc: 'Gera ideias de nomes criativos e disponíveis para o seu novo canal no YouTube.', prompt: 'Gere 10 nomes de canal verdadeiramente únicos e memoráveis para o nicho de "{{input}}". Verifique se os nomes são fáceis de lembrar e pronunciar.' },
                  { name: 'Simulador de Receita YouTube', func: 'executeGenericTool', desc: 'Estima o potencial de ganho de um vídeo com base no número de visualizações e CPM.', prompt: 'Aja como uma calculadora de receita do YouTube. Para um vídeo com {{input.0}} visualizações e um CPM (custo por mil visualizações) de ${{input.1}}, calcule a receita estimada. Mostre o cálculo passo a passo da seguinte forma:\n\n- **Dados:**\n  - Visualizações: {{input.0}}\n  - CPM: ${{input.1}}\n\n- **Fórmula:**\n  - Receita Estimada = (Visualizações / 1000) * CPM\n\n- **Cálculo:**\n  - Receita Estimada = ({{input.0}} / 1000) * ${{input.1}}\n  - Mostre o resultado do cálculo aqui.\n\n- **Resultado Final:**\n  - Apresente a receita final formatada em dólar aqui.' },
                  { name: 'Persona Inteligente com IA', func: 'executeGenericTool', desc: 'Cria um perfil detalhado do seu espectador ideal (avatar) para direcionar melhor o seu conteúdo.', prompt: 'Crie uma persona (avatar) detalhada para um canal do YouTube sobre "{{input}}". Inclua dados demográficos, interesses, dores, objetivos e plataformas de mídia social que a persona utiliza.' },
                  { name: 'Verificador de Alinhamento de Persona e Conteúdo', func: 'executeGenericTool', desc: 'Verifica se um vídeo está alinhado com a persona do canal.', prompt: 'Analise se o roteiro de vídeo abaixo está alinhado com a seguinte persona. Aponte 3 pontos de alinhamento ou desalinhamento.\n\nPersona: {{input.0}}\n\nRoteiro: {{input.1}}', numInputs: 2, inputPlaceholders: ['Descreva sua persona...', 'Cole o roteiro aqui...'] },
@@ -643,7 +643,7 @@
             tools: [
                 { name: 'Criador de Vídeo a partir de Texto (kie.ai)', func: 'executeVideoPromptGenerator', desc: 'Gera prompts visuais detalhados para IAs de vídeo como kie.ai a partir de uma cena descritiva.', prompt: 'Aja como um diretor de cinema para a IA kie.ai. Crie uma descrição de cena detalhada para gerar um vídeo com base no seguinte prompt: "{{input}}". Descreva a câmera, iluminação, personagens e ação.', fieldType: 'textarea' },
                 { name: 'Gerador de Trailer Cinematográfico por Tema', func: 'executeVideoPromptGenerator', desc: 'Cria um roteiro completo para um trailer cinematográfico.', prompt: 'Crie um roteiro de 1 minuto para um trailer cinematográfico sobre o tema "{{input}}". Inclua 3 cenas principais, texto na tela, narração e sugestão de trilha sonora épica.' },
-                { name: 'Gerador de Animação para Imagem (kie.ai)', func: 'executeVideoPromptGenerator', desc: 'Gera prompts de animação para uma imagem estática.', prompt: 'Aja como um animador para a kie.ai. A imagem carregada mostra: [Descreva a imagem aqui]. Com base na seguinte instrução, crie uma série de prompts para animar esta imagem: "{{input}}". Descreva os movimentos sutis, mudanças de iluminação e efeitos para dar vida à imagem.', fieldType: 'textarea', hasFileUpload: true },
+                { name: 'Gerador de Animação para Imagem (kie.ai)', func: 'executeImageAndVideoPromptGenerator', desc: 'Gera uma imagem base com IA e, em seguida, cria os prompts de animação para usar em ferramentas como kie.ai.', prompt: 'Aja como um animador para a kie.ai. A imagem gerada mostra: {{input}}. Com base nisso, crie uma série de prompts para animar esta imagem. Descreva os movimentos sutis, mudanças de iluminação e efeitos para dar vida à imagem.', fieldType: 'textarea', hasFileUpload: true },
                 { name: 'Geração de Vídeo Estilo Reels com Emoção', func: 'executeVideoPromptGenerator', desc: 'Cria um roteiro de Reels focado em evocar uma emoção específica.', prompt: 'Crie um roteiro de Reels de 15 segundos sobre "{{input.0}}" projetado para evocar a emoção de "{{input.1}}". Descreva as cenas, o texto e a música. (Formato: tema, emoção)', numInputs: 2, inputPlaceholders: ['Tema do Reels...', 'Emoção desejada...'] },
                 { name: 'Criador de Clipes Musicais com IA', func: 'executeVideoPromptGenerator', desc: 'Gera um storyboard visual para um clipe musical a partir da letra.', prompt: 'Crie um storyboard visual com 5 cenas para um clipe musical com base no seguinte trecho da letra:\n\n"{{input}}"', fieldType: 'textarea' },
                 { name: 'Geração de Vídeo em Estilo Épico (tipo trailer Marvel)', func: 'executeVideoPromptGenerator', desc: 'Cria um roteiro de trailer no estilo de super-herói.', prompt: 'Crie um roteiro para um trailer de 30 segundos no estilo épico da Marvel sobre "{{input}}". Use narração grave, cortes rápidos, cenas de ação e termine com um título impactante.' },
@@ -659,6 +659,12 @@
             ]
         },
         {
+            name: "🤖 Assistentes de Criação IA",
+            tools: [
+                { name: 'Assistente de Criação de Vídeo (kie.ai)', func: 'executeAssistant', desc: 'Um assistente passo a passo para criar vídeos com IA. Gere o roteiro, edite-o e depois gere os prompts para a kie.ai.' },
+            ]
+        },
+        {
             name: "⚙️ Configurações",
             tools: [
                 { name: 'Gerenciar Chaves de API', func: 'abrirModal', desc: 'Gerencie suas chaves de API externas aqui.' },
@@ -671,9 +677,9 @@
         { name: 'Francês', flag: '🇫🇷' }, { name: 'Alemão', flag: '🇩🇪' },
         { name: 'Italiano', flag: '🇮🇹' }, { name: 'Português', flag: '🇧🇷' },
         { name: 'Japonês', flag: '🇯🇵' }, { name: 'Russo', flag: '🇷🇺' },
-        { name: 'Árabe', flag: '🇸🇦' }, { name: 'Hindi', flag: '🇮🇳' },
+        { name: 'Árabe', flag: '🇸🇦' }, { name: 'Hindi', flag: '�🇳' },
         { name: 'Coreano', flag: '🇰🇷' }, { name: 'Holandês', flag: '🇳🇱' },
-        { name: 'Turco', flag: '�🇷' }, { name: 'Sueco', flag: '🇸🇪' },
+        { name: 'Turco', flag: '🇹🇷' }, { name: 'Sueco', flag: '🇸🇪' },
         { name: 'Polonês', flag: '🇵🇱' }, { name: 'Indonésio', flag: '🇮🇩' }
     ];
 
@@ -805,6 +811,24 @@
                 <div id="preview_${tool.id}" class="preview-container"></div>
                 ${buttonHTML}
             `;
+        } else if (tool.func === 'executeAssistant') {
+             fields = `
+                <div id="assistant_step_1_${tool.id}">
+                    <label>Passo 1: Qual é o tema do seu vídeo?</label>
+                    <input type="text" id="input_assistant_idea_${tool.id}" placeholder="Ex: Uma viagem a Marte em 2050">
+                    <button onclick="assistantGenerateScript('${tool.id}')">Gerar Roteiro</button>
+                </div>
+                <div id="assistant_step_2_${tool.id}" style="display:none;">
+                    <label>Passo 2: Edite o roteiro gerado (opcional)</label>
+                    <textarea id="input_assistant_script_${tool.id}" rows="10"></textarea>
+                    <button onclick="assistantGeneratePrompts('${tool.id}')">Gerar Prompts para kie.ai</button>
+                </div>
+                <div id="assistant_step_3_${tool.id}" style="display:none;">
+                     <label>Passo 3: Use estes prompts na kie.ai</label>
+                     <div id="output_assistant_prompts_${tool.id}" class="output"></div>
+                     <button onclick="openKieAndCopy('${tool.id}')">Abrir kie.ai e Copiar Prompts</button>
+                </div>
+            `;
         } else if (tool.fieldType === 'textarea' || tool.numInputs > 1) {
              let textareas = '';
              const numInputs = tool.numInputs || 1;
@@ -914,6 +938,9 @@
     // API & CORE LOGIC: Handles API calls, error handling, and helpers.
     // ===================================================================================
     const LOADER_HTML = `<div class="loader"></div>`;
+    const API_BASE_URL = window.location.hostname.includes('onrender.com') 
+        ? window.location.origin 
+        : 'http://localhost:3000';
 
     function getApiKey(type) {
         const keys = JSON.parse(localStorage.getItem('apiKeys')) || {};
@@ -971,8 +998,9 @@
     async function callApi(endpoint, payload, outputElementId) {
         const outputElement = document.getElementById(outputElementId);
         outputElement.innerHTML = LOADER_HTML;
+        const fullUrl = `${API_BASE_URL}${endpoint}`;
         try {
-            const response = await fetch(endpoint, {
+            const response = await fetch(fullUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
@@ -984,7 +1012,13 @@
             }
             return result;
         } catch (error) {
-            outputElement.innerText = `❌ Erro: ${error.message}\n\nVerifique se o servidor backend está a correr e se as chaves de API estão corretas.`;
+            let errorMessage = `❌ Erro: ${error.message}\n\n`;
+            if (window.location.protocol === 'file:') {
+                errorMessage += "Parece que você está a executar este ficheiro localmente. Para que funcione, você precisa de ter o servidor (server.js) a correr ao mesmo tempo. Siga o Passo 2 do tutorial de hospedagem.";
+            } else {
+                errorMessage += "Verifique se o seu servidor backend está a correr e se as chaves de API estão configuradas corretamente no Render.";
+            }
+            outputElement.innerText = errorMessage;
             console.error('API Call Error:', error);
             return null;
         }
@@ -1041,7 +1075,7 @@
         for (let i = 0; i < numInputs; i++) {
             const inputElement = document.getElementById(`input_${i}_${tool.id}`) || document.getElementById(`input_${tool.id}`);
             if (!inputElement || !inputElement.value) {
-                throw new Error(`Por favor, preencha o campo de entrada ${i + 1}.`);
+                throw new Error(`Por favor, preencha o campo de entrada.`);
             }
             inputs.push(inputElement.value);
         }
@@ -1089,7 +1123,7 @@
         for (let i = 0; i < numInputs; i++) {
             const inputElement = document.getElementById(`input_${i}_${tool.id}`);
             if (!inputElement || !inputElement.value) {
-                throw new Error(`Por favor, preencha o campo de entrada ${i + 1}.`);
+                throw new Error(`Por favor, preencha o campo de entrada.`);
             }
             inputs.push(inputElement.value);
         }
@@ -1197,25 +1231,10 @@
         const tool = findToolById(toolId);
         const outputElement = document.getElementById(`output_${toolId}`);
         
-        const kieKey = getApiKey('kie');
-        if (!kieKey) {
-            outputElement.innerText = "Chave da API da kie.ai não encontrada. Por favor, adicione-a nas configurações para usar esta ferramenta.";
-            return;
-        }
-
-        const simulatedPlayer = `
-            <div class="simulated-video-player">
-                <div class="play-icon">
-                    <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 0 24 24" width="24px"><path d="M0 0h24v24H0z" fill="none"/><path d="M8 5v14l11-7z"/></svg>
-                </div>
-                <p class="text-gray-400">Gerando prompts para kie.ai...</p>
-            </div>
-        `;
-        
         const promptContainer = document.createElement('div');
         promptContainer.id = `prompts_${toolId}`;
         
-        outputElement.innerHTML = simulatedPlayer;
+        outputElement.innerHTML = LOADER_HTML;
         outputElement.appendChild(promptContainer);
         
         try {
@@ -1224,7 +1243,7 @@
             for (let i = 0; i < numInputs; i++) {
                 const inputElement = document.getElementById(`input_${i}_${tool.id}`) || document.getElementById(`input_${tool.id}`);
                 if (!inputElement || !inputElement.value) {
-                    throw new Error(`Por favor, preencha o campo de entrada ${i + 1}.`);
+                    throw new Error(`Por favor, preencha o campo de entrada.`);
                 }
                 inputs.push(inputElement.value);
             }
@@ -1244,6 +1263,44 @@
             promptContainer.innerText = `❌ ${error.message}`;
         }
     }
+    
+    async function executeImageAndVideoPromptGenerator(toolId) {
+        const tool = findToolById(toolId);
+        const outputElement = document.getElementById(`output_${toolId}`);
+        const inputElement = document.getElementById(`input_${toolId}`);
+        const fileInput = document.getElementById(`file_input_${toolId}`);
+
+        if (!inputElement.value) {
+            throw new Error("Por favor, descreva a imagem ou a animação desejada.");
+        }
+
+        let basePrompt = inputElement.value;
+        
+        // Step 1: Generate the base image
+        const imageResult = await callApi('/api/imagen', { prompt: basePrompt }, `output_${toolId}`);
+        
+        let imageHTML = '';
+        if (imageResult && imageResult.predictions && imageResult.predictions.length > 0) {
+            const imageUrl = `data:image/png;base64,${imageResult.predictions[0].bytesBase64Encoded}`;
+            imageHTML = `<img src="${imageUrl}" alt="Imagem base gerada por IA" class="w-full rounded-lg mb-4">`;
+        } else {
+            imageHTML = `<p class="text-red-400">Falha ao gerar imagem base.</p>`;
+        }
+
+        // Step 2: Generate animation prompts based on the initial prompt
+        const promptContainer = document.createElement('div');
+        promptContainer.id = `prompts_${toolId}`;
+        outputElement.innerHTML = imageHTML;
+        outputElement.appendChild(promptContainer);
+        
+        const animationPrompt = `Com base na seguinte ideia "${basePrompt}", crie uma lista de prompts detalhados para animar esta cena usando uma IA de vídeo como a kie.ai. Descreva os movimentos de câmera, evolução da cena e efeitos.`;
+        const animationResult = await callApi('/api/gemini', { prompt: animationPrompt }, promptContainer.id);
+
+        if (animationResult && animationResult.candidates && animationResult.candidates.length > 0) {
+            const text = animationResult.candidates[0].content.parts[0].text;
+            promptContainer.innerHTML = `<div><strong>✅ Prompts de Animação Prontos!</strong><br><p class='text-sm text-gray-400'>Use os prompts abaixo em <a href='https://kie.ai/pt' target='_blank' class='text-cyan-400'>kie.ai</a> para animar a imagem acima.</p></div><br>${text}<button class="copy-btn" onclick="copyToClipboard('${promptContainer.id}')">Copiar</button>`;
+        }
+    }
 
     // ===================================================================================
     // FUNCTION MAP: Connects tool 'func' strings to the actual functions.
@@ -1256,7 +1313,8 @@
         'abrirModal': abrirModal,
         'executeTranslator': executeTranslator,
         'executeLinkAnalysisTool': executeLinkAnalysisTool,
-        'executeVideoPromptGenerator': executeVideoPromptGenerator
+        'executeVideoPromptGenerator': executeVideoPromptGenerator,
+        'executeImageAndVideoPromptGenerator': executeImageAndVideoPromptGenerator
     };
 
     </script>
@@ -1264,4 +1322,3 @@
 </body>
 </html>
 �
-
