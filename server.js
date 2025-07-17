@@ -19,6 +19,18 @@ const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
 // A chave da kie.ai está aqui para o futuro, mas não será usada diretamente em chamadas
 const KIE_API_KEY = process.env.KIE_API_KEY; 
 
+// Função auxiliar para chamadas de API com log de erros melhorado
+async function fetchWithEnhancedLogging(url, options, apiName) {
+    const response = await fetch(url, options);
+    if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(`Erro na API ${apiName}: Status ${response.status}`, errorBody);
+        throw new Error(`Erro na API ${apiName}. Verifique os logs do servidor no Render para detalhes.`);
+    }
+    return response.json();
+}
+
+
 // Rota para ferramentas genéricas da Gemini (texto)
 app.post('/api/gemini', async (req, res) => {
     try {
@@ -26,13 +38,11 @@ app.post('/api/gemini', async (req, res) => {
         if (!GEMINI_API_KEY) throw new Error('Chave da API Gemini não configurada no servidor.');
 
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const response = await fetch(apiUrl, {
+        const data = await fetchWithEnhancedLogging(apiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error?.message || 'Erro na API da Gemini.');
+        }, 'Gemini');
         res.json(data);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -46,13 +56,11 @@ app.post('/api/imagen', async (req, res) => {
         if (!IMAGEN_API_KEY) throw new Error('Chave da API Imagen não configurada no servidor.');
 
         const apiUrl = `https://generativelanguage.googleapis.com/v1/models/imagen-3.0-generate-002:predict?key=${IMAGEN_API_KEY}`;
-        const response = await fetch(apiUrl, {
+        const data = await fetchWithEnhancedLogging(apiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ instances: [{ prompt: prompt }], parameters: { "sampleCount": 1 } })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error?.message || 'Erro na API Imagen.');
+        }, 'Imagen');
         res.json(data);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -66,9 +74,7 @@ app.post('/api/youtube-search', async (req, res) => {
         if (!YOUTUBE_API_KEY) throw new Error('Chave da API do YouTube não configurada no servidor.');
 
         const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(termo)}&type=video&maxResults=9&key=${YOUTUBE_API_KEY}&regionCode=${regionCode}&order=${order}&videoDuration=${videoDuration}`;
-        const searchResponse = await fetch(searchUrl);
-        const searchData = await searchResponse.json();
-        if (!searchResponse.ok) throw new Error(searchData.error.message);
+        const searchData = await fetchWithEnhancedLogging(searchUrl, {}, 'YouTube Search');
         
         if (!searchData.items || searchData.items.length === 0) {
             return res.json({ items: [] });
@@ -76,9 +82,7 @@ app.post('/api/youtube-search', async (req, res) => {
 
         const videoIds = searchData.items.map(item => item.id.videoId).join(',');
         const statsUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoIds}&key=${YOUTUBE_API_KEY}`;
-        const statsResponse = await fetch(statsUrl);
-        const statsData = await statsResponse.json();
-        if (!statsResponse.ok) throw new Error(statsData.error.message);
+        const statsData = await fetchWithEnhancedLogging(statsUrl, {}, 'YouTube Stats');
         
         res.json(statsData);
     } catch (error) {
@@ -93,9 +97,7 @@ app.post('/api/youtube-trending', async (req, res) => {
         if (!YOUTUBE_API_KEY) throw new Error('Chave da API do YouTube não configurada no servidor.');
 
         const apiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&regionCode=${regionCode}&maxResults=9&key=${YOUTUBE_API_KEY}`;
-        const response = await fetch(apiUrl);
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error.message);
+        const data = await fetchWithEnhancedLogging(apiUrl, {}, 'YouTube Trending');
         res.json(data);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -109,23 +111,17 @@ app.post('/api/link-analysis', async (req, res) => {
         if (!YOUTUBE_API_KEY || !GEMINI_API_KEY) throw new Error('Chaves de API do YouTube e Gemini são necessárias.');
         
         const youtubeApiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoId}&key=${YOUTUBE_API_KEY}`;
-        const youtubeResponse = await fetch(youtubeApiUrl);
-        const youtubeData = await youtubeResponse.json();
-        if (!youtubeResponse.ok || !youtubeData.items || youtubeData.items.length === 0) {
-            throw new Error(youtubeData.error?.message || 'Vídeo não encontrado ou link inválido.');
-        }
+        const youtubeData = await fetchWithEnhancedLogging(youtubeApiUrl, {}, 'YouTube Video Details');
         const videoData = youtubeData.items[0];
 
         const contextPacket = `--- CONTEXTO DO VÍDEO ---\nTítulo: ${videoData.snippet.title}\nDescrição: ${videoData.snippet.description}\nTags: ${(videoData.snippet.tags || []).join(', ')}\nVisualizações: ${videoData.statistics.viewCount}\nLikes: ${videoData.statistics.likeCount}\nComentários: ${videoData.statistics.commentCount}\n--- FIM DO CONTEXTO ---\n\nCom base no CONTEXTO DO VÍDEO fornecido acima, execute a seguinte tarefa:\n${prompt}`;
 
         const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const geminiResponse = await fetch(geminiApiUrl, {
+        const geminiData = await fetchWithEnhancedLogging(geminiApiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ parts: [{ text: contextPacket }] }] })
-        });
-        const geminiData = await geminiResponse.json();
-        if (!geminiResponse.ok) throw new Error(geminiData.error?.message || 'Erro na API da Gemini.');
+        }, 'Gemini (Link Analysis)');
         
         res.json(geminiData);
     } catch (error) {
