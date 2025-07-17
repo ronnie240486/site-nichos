@@ -680,7 +680,7 @@
         { name: 'Árabe', flag: '🇸🇦' }, { name: 'Hindi', flag: '🇮🇳' },
         { name: 'Coreano', flag: '🇰🇷' }, { name: 'Holandês', flag: '🇳🇱' },
         { name: 'Turco', flag: '🇹🇷' }, { name: 'Sueco', flag: '🇸🇪' },
-        { name: 'Polonês', flag: '🇵🇱' }, { name: 'Indonésio', flag: '🇮🇩' }
+        { name: 'Polonês', flag: '�🇱' }, { name: 'Indonésio', flag: '🇮🇩' }
     ];
 
     // ===================================================================================
@@ -1279,12 +1279,16 @@
         // Step 1: Generate the base image
         const imageResult = await callApi('/api/imagen', { prompt: basePrompt }, `output_${toolId}`);
         
+        if (!imageResult) return; // Stop if the API call failed
+
         let imageHTML = '';
-        if (imageResult && imageResult.predictions && imageResult.predictions.length > 0) {
+        if (imageResult.predictions && imageResult.predictions.length > 0) {
             const imageUrl = `data:image/png;base64,${imageResult.predictions[0].bytesBase64Encoded}`;
             imageHTML = `<img src="${imageUrl}" alt="Imagem base gerada por IA" class="w-full rounded-lg mb-4">`;
         } else {
-            imageHTML = `<p class="text-red-400">Falha ao gerar imagem base.</p>`;
+             // This case is unlikely if the call was successful, but good to have a fallback.
+            outputElement.innerHTML = `<p class="text-red-400">A API respondeu com sucesso, mas não retornou uma imagem. Tente um prompt diferente.</p>`;
+            return;
         }
 
         // Step 2: Generate animation prompts based on the initial prompt
@@ -1321,3 +1325,4 @@
 
 </body>
 </html>
+�
