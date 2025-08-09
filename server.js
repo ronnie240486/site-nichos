@@ -1,137 +1,94 @@
-// Importa as dependências necessárias
+// server.js - Backend para a aplicação DarkMaker
+
+// 1. Importação de Módulos
 const express = require('express');
-const fetch = require('node-fetch');
+const multer = require('multer');
+const { exec } = require('child_process');
+const path = require('path');
+const fs = require('fs');
 const cors = require('cors');
-require('dotenv').config(); // Carrega as variáveis de ambiente do ficheiro .env
 
-// Cria a aplicação Express
+// 2. Configuração Inicial
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// Configurações do servidor
-app.use(cors()); // Permite que o frontend (em outro domínio) aceda a este backend
-app.use(express.json()); // Permite que o servidor entenda JSON nos corpos das requisições
-app.use(express.static('public')); // Serve os ficheiros da pasta 'public' (onde ficará o index.html)
+// Cria as pastas se não existirem
+const uploadDir = path.join(__dirname, 'uploads');
+const processedDir = path.join(__dirname, 'processed');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
-// Pega nas chaves de API guardadas em segurança no ambiente do Render
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const IMAGEN_API_KEY = process.env.IMAGEN_API_KEY;
-const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
-// A chave da kie.ai está aqui para o futuro, mas não será usada diretamente em chamadas
-const KIE_API_KEY = process.env.KIE_API_KEY; 
+// 3. Middlewares
+app.use(cors()); 
+app.use('/downloads', express.static(processedDir));
 
-// Função auxiliar para chamadas de API com log de erros melhorado
-async function fetchWithEnhancedLogging(url, options, apiName) {
-    const response = await fetch(url, options);
-    if (!response.ok) {
-        const errorBody = await response.text();
-        console.error(`Erro na API ${apiName}: Status ${response.status}`, errorBody);
-        throw new Error(`Erro na API ${apiName}. Verifique os logs do servidor no Render para detalhes.`);
-    }
-    return response.json();
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
+});
+const upload = multer({ storage: storage });
+
+// 4. Função Auxiliar para FFmpeg
+function runFFmpeg(command) {
+  return new Promise((resolve, reject) => {
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`FFmpeg Error: ${stderr}`);
+        return reject(new Error(`Erro no FFmpeg: ${stderr}`));
+      }
+      resolve('Processamento FFmpeg concluído com sucesso.');
+    });
+  });
 }
 
+// 5. Rotas da API
+app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 
-// Rota para ferramentas genéricas da Gemini (texto)
-app.post('/api/gemini', async (req, res) => {
-    try {
-        const { prompt } = req.body;
-        if (!GEMINI_API_KEY) throw new Error('Chave da API Gemini não configurada no servidor.');
+app.post('/api/cortar', upload.single('video'), async (req, res) => {
+  if (!req.file) return res.status(400).send('Nenhum ficheiro de vídeo enviado.');
+  const { startTime, endTime } = req.body;
+  if (!startTime || !endTime) return res.status(400).send('Tempos de início e fim são obrigatórios.');
 
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const data = await fetchWithEnhancedLogging(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-        }, 'Gemini');
-        res.json(data);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+  const inputPath = req.file.path;
+  const outputFilename = `cortado-${req.file.filename}`;
+  const outputPath = path.join(processedDir, outputFilename);
+  const command = `ffmpeg -i "${inputPath}" -ss ${startTime} -to ${endTime} -c copy "${outputPath}"`;
+
+  try {
+    await runFFmpeg(command);
+    const downloadUrl = `${req.protocol}://${req.get('host')}/downloads/${outputFilename}`;
+    res.json({ message: 'Vídeo cortado com sucesso!', downloadUrl });
+  } catch (error) {
+    res.status(500).send(error.message);
+  } finally {
+    fs.unlinkSync(inputPath);
+  }
 });
 
-// Rota para gerar imagens com Imagen
-app.post('/api/imagen', async (req, res) => {
-    try {
-        const { prompt } = req.body;
-        if (!IMAGEN_API_KEY) throw new Error('Chave da API Imagen não configurada no servidor.');
+app.post('/api/unir', upload.array('videos'), async (req, res) => {
+  if (!req.files || req.files.length < 2) return res.status(400).send('Pelo menos dois vídeos são necessários para unir.');
 
-        const apiUrl = `https://generativelanguage.googleapis.com/v1/models/imagen-3.0-generate-002:predict?key=${IMAGEN_API_KEY}`;
-        const data = await fetchWithEnhancedLogging(apiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ instances: [{ prompt: prompt }], parameters: { "sampleCount": 1 } })
-        }, 'Imagen');
-        res.json(data);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+  const fileListPath = path.join(uploadDir, `list-${Date.now()}.txt`);
+  const fileContent = req.files.map(f => `file '${f.path}'`).join('\n');
+  fs.writeFileSync(fileListPath, fileContent);
+
+  const outputFilename = `unido-${Date.now()}.mp4`;
+  const outputPath = path.join(processedDir, outputFilename);
+  const command = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`;
+
+  try {
+    await runFFmpeg(command);
+    const downloadUrl = `${req.protocol}://${req.get('host')}/downloads/${outputFilename}`;
+    res.json({ message: 'Vídeos unidos com sucesso!', downloadUrl });
+  } catch (error) {
+    res.status(500).send(error.message);
+  } finally {
+    req.files.forEach(f => fs.unlinkSync(f.path));
+    fs.unlinkSync(fileListPath);
+  }
 });
 
-// Rota para buscar vídeos no YouTube (pesquisa e shorts)
-app.post('/api/youtube-search', async (req, res) => {
-    try {
-        const { termo, regionCode, order, videoDuration } = req.body;
-        if (!YOUTUBE_API_KEY) throw new Error('Chave da API do YouTube não configurada no servidor.');
-
-        const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(termo)}&type=video&maxResults=9&key=${YOUTUBE_API_KEY}&regionCode=${regionCode}&order=${order}&videoDuration=${videoDuration}`;
-        const searchData = await fetchWithEnhancedLogging(searchUrl, {}, 'YouTube Search');
-        
-        if (!searchData.items || searchData.items.length === 0) {
-            return res.json({ items: [] });
-        }
-
-        const videoIds = searchData.items.map(item => item.id.videoId).join(',');
-        const statsUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoIds}&key=${YOUTUBE_API_KEY}`;
-        const statsData = await fetchWithEnhancedLogging(statsUrl, {}, 'YouTube Stats');
-        
-        res.json(statsData);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Rota para buscar vídeos em alta (trending)
-app.post('/api/youtube-trending', async (req, res) => {
-    try {
-        const { regionCode } = req.body;
-        if (!YOUTUBE_API_KEY) throw new Error('Chave da API do YouTube não configurada no servidor.');
-
-        const apiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&regionCode=${regionCode}&maxResults=9&key=${YOUTUBE_API_KEY}`;
-        const data = await fetchWithEnhancedLogging(apiUrl, {}, 'YouTube Trending');
-        res.json(data);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Rota para analisar um vídeo por link
-app.post('/api/link-analysis', async (req, res) => {
-    try {
-        const { videoId, prompt } = req.body;
-        if (!YOUTUBE_API_KEY || !GEMINI_API_KEY) throw new Error('Chaves de API do YouTube e Gemini são necessárias.');
-        
-        const youtubeApiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id=${videoId}&key=${YOUTUBE_API_KEY}`;
-        const youtubeData = await fetchWithEnhancedLogging(youtubeApiUrl, {}, 'YouTube Video Details');
-        const videoData = youtubeData.items[0];
-
-        const contextPacket = `--- CONTEXTO DO VÍDEO ---\nTítulo: ${videoData.snippet.title}\nDescrição: ${videoData.snippet.description}\nTags: ${(videoData.snippet.tags || []).join(', ')}\nVisualizações: ${videoData.statistics.viewCount}\nLikes: ${videoData.statistics.likeCount}\nComentários: ${videoData.statistics.commentCount}\n--- FIM DO CONTEXTO ---\n\nCom base no CONTEXTO DO VÍDEO fornecido acima, execute a seguinte tarefa:\n${prompt}`;
-
-        const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
-        const geminiData = await fetchWithEnhancedLogging(geminiApiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: contextPacket }] }] })
-        }, 'Gemini (Link Analysis)');
-        
-        res.json(geminiData);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-
-// Inicia o servidor
-const PORT = process.env.PORT || 3000;
+// 6. Iniciar o Servidor
 app.listen(PORT, () => {
-    console.log(`Servidor a correr na porta ${PORT}`);
+  console.log(`Servidor a correr na porta ${PORT}`);
 });
