@@ -115,9 +115,11 @@ app.post('/unir-videos', upload.array('videos'), async (req, res) => {
     return res.status(400).send('Pelo menos dois vídeos são necessários para unir.');
   }
 
+  // CORREÇÃO: Usa os caminhos absolutos dos ficheiros na lista
   const fileContent = filePaths.map(p => `file '${p}'`).join('\n');
   fs.writeFileSync(fileListPath, fileContent);
 
+  // CORREÇÃO: Usa o caminho absoluto para o ficheiro de lista e remove o 'cwd'
   const command = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`;
 
   try {
@@ -165,13 +167,12 @@ app.post('/comprimir-videos', upload.single('videos'), async (req, res) => {
 // Rota para Embaralhar Vídeos
 app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
-    const filePaths = files.map(f => f.path);
     const fileListPath = path.join(uploadDir, `list-embaralhada-${Date.now()}.txt`);
     const outputFilename = `embaralhado-${Date.now()}.mp4`;
     const outputPath = path.join(processedDir, outputFilename);
 
     const cleanup = () => {
-      filePaths.forEach(p => { if (fs.existsSync(p)) fs.unlinkSync(p); });
+      files.forEach(f => { if (f.path && fs.existsSync(f.path)) fs.unlinkSync(f.path); });
       if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
       if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
     };
@@ -181,10 +182,12 @@ app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
       return res.status(400).send('Pelo menos dois vídeos são necessários para embaralhar.');
     }
 
-    let shuffledPaths = filePaths.sort(() => Math.random() - 0.5);
-    const fileContent = shuffledPaths.map(p => `file '${p}'`).join('\n');
+    let shuffledFiles = files.sort(() => Math.random() - 0.5);
+    // CORREÇÃO: Usa os caminhos absolutos dos ficheiros na lista
+    const fileContent = shuffledFiles.map(f => `file '${f.path}'`).join('\n');
     fs.writeFileSync(fileListPath, fileContent);
 
+    // CORREÇÃO: Usa o caminho absoluto para o ficheiro de lista e remove o 'cwd'
     const command = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`;
 
     try {
@@ -253,6 +256,14 @@ app.post('/criar-video-automatico', upload.fields([
   if (narrationFile) tempFiles.push(narrationFile.path);
   mediaFiles.forEach(f => tempFiles.push(f.path));
 
+  const fileListPath = path.join(uploadDir, `list-auto-${Date.now()}.txt`);
+  tempFiles.push(fileListPath);
+  const silentVideoPath = path.join(processedDir, `silent-${Date.now()}.mp4`);
+  tempFiles.push(silentVideoPath);
+  const outputFilename = `automatico-${Date.now()}.mp4`;
+  const outputPath = path.join(processedDir, outputFilename);
+  tempFiles.push(outputPath);
+
   const cleanup = () => {
       tempFiles.forEach(filePath => {
           if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
@@ -264,18 +275,11 @@ app.post('/criar-video-automatico', upload.fields([
     return res.status(400).send('Narração e pelo menos um ficheiro de media são obrigatórios.');
   }
 
-  const fileListPath = path.join(uploadDir, `list-auto-${Date.now()}.txt`);
-  tempFiles.push(fileListPath);
-  const silentVideoPath = path.join(processedDir, `silent-${Date.now()}.mp4`);
-  tempFiles.push(silentVideoPath);
-  const outputFilename = `automatico-${Date.now()}.mp4`;
-  const outputPath = path.join(processedDir, outputFilename);
-  tempFiles.push(outputPath);
-
   try {
     const audioDuration = await getMediaDuration(narrationFile.path);
     const durationPerImage = audioDuration / mediaFiles.length;
 
+    // CORREÇÃO: Usa os caminhos absolutos dos ficheiros na lista
     const fileContent = mediaFiles.map(f => `file '${f.path}'\nduration ${durationPerImage}`).join('\n');
     fs.writeFileSync(fileListPath, fileContent);
     
