@@ -99,13 +99,12 @@ app.post('/cortar-video', upload.single('videos'), async (req, res) => {
 // Rota para Unir Vídeos
 app.post('/unir-videos', upload.array('videos'), async (req, res) => {
   const files = req.files || [];
-  const filePaths = files.map(f => f.path);
   const fileListPath = path.join(uploadDir, `list-${Date.now()}.txt`);
   const outputFilename = `unido-${Date.now()}.mp4`;
   const outputPath = path.join(processedDir, outputFilename);
 
   const cleanup = () => {
-    filePaths.forEach(p => { if (fs.existsSync(p)) fs.unlinkSync(p); });
+    files.forEach(f => { if (f.path && fs.existsSync(f.path)) fs.unlinkSync(f.path); });
     if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
     if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
   };
@@ -115,15 +114,15 @@ app.post('/unir-videos', upload.array('videos'), async (req, res) => {
     return res.status(400).send('Pelo menos dois vídeos são necessários para unir.');
   }
 
-  // CORREÇÃO: Usa os caminhos absolutos dos ficheiros na lista
-  const fileContent = filePaths.map(p => `file '${p}'`).join('\n');
+  // CORREÇÃO: Usa apenas os nomes dos ficheiros na lista
+  const fileContent = files.map(f => `file '${f.filename}'`).join('\n');
   fs.writeFileSync(fileListPath, fileContent);
 
-  // CORREÇÃO: Usa o caminho absoluto para o ficheiro de lista e remove o 'cwd'
-  const command = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`;
+  // CORREÇÃO: Executa o FFmpeg a partir da pasta de uploads
+  const command = `ffmpeg -f concat -safe 0 -i "${path.basename(fileListPath)}" -c copy "${outputPath}"`;
 
   try {
-    await runFFmpeg(command);
+    await runFFmpeg(command, { cwd: uploadDir });
     res.download(outputPath, outputFilename, (err) => {
       if (err) console.error("Erro ao enviar o ficheiro:", err);
       cleanup();
@@ -183,15 +182,15 @@ app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
     }
 
     let shuffledFiles = files.sort(() => Math.random() - 0.5);
-    // CORREÇÃO: Usa os caminhos absolutos dos ficheiros na lista
-    const fileContent = shuffledFiles.map(f => `file '${f.path}'`).join('\n');
+    // CORREÇÃO: Usa apenas os nomes dos ficheiros na lista
+    const fileContent = shuffledFiles.map(f => `file '${f.filename}'`).join('\n');
     fs.writeFileSync(fileListPath, fileContent);
 
-    // CORREÇÃO: Usa o caminho absoluto para o ficheiro de lista e remove o 'cwd'
-    const command = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`;
+    // CORREÇÃO: Executa o FFmpeg a partir da pasta de uploads
+    const command = `ffmpeg -f concat -safe 0 -i "${path.basename(fileListPath)}" -c copy "${outputPath}"`;
 
     try {
-        await runFFmpeg(command);
+        await runFFmpeg(command, { cwd: uploadDir });
         res.download(outputPath, outputFilename, (err) => {
             if (err) console.error("Erro ao enviar o ficheiro:", err);
             cleanup();
@@ -279,12 +278,13 @@ app.post('/criar-video-automatico', upload.fields([
     const audioDuration = await getMediaDuration(narrationFile.path);
     const durationPerImage = audioDuration / mediaFiles.length;
 
-    // CORREÇÃO: Usa os caminhos absolutos dos ficheiros na lista
-    const fileContent = mediaFiles.map(f => `file '${f.path}'\nduration ${durationPerImage}`).join('\n');
+    // CORREÇÃO: Usa apenas os nomes dos ficheiros na lista
+    const fileContent = mediaFiles.map(f => `file '${f.filename}'\nduration ${durationPerImage}`).join('\n');
     fs.writeFileSync(fileListPath, fileContent);
     
-    const createSilentVideoCmd = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p" -c:v libx264 -r 25 -y "${silentVideoPath}"`;
-    await runFFmpeg(createSilentVideoCmd);
+    // CORREÇÃO: Executa o FFmpeg a partir da pasta de uploads
+    const createSilentVideoCmd = `ffmpeg -f concat -safe 0 -i "${path.basename(fileListPath)}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p" -c:v libx264 -r 25 -y "${silentVideoPath}"`;
+    await runFFmpeg(createSilentVideoCmd, { cwd: uploadDir });
 
     const addAudioCmd = `ffmpeg -i "${silentVideoPath}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest "${outputPath}"`;
     await runFFmpeg(addAudioCmd);
