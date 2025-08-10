@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: darkmaker-api
+    env: node
+    plan: free
+    buildCommand: "npm install"
+    startCommand: "node server.js"
+    envVars:
+      - key: FFMPEG_PATH
+        value: /usr/bin/ffmpeg
+      - key: FFPROBE_PATH
+        value: /usr/bin/ffprobe
+
+# Adiciona o FFmpeg ao ambiente de execução
+# Esta parte é essencial para o processamento de vídeo funcionar
+build:
+  packages:
+    - ffmpeg
