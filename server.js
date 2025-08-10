@@ -1,5 +1,6 @@
-// server.js - Backend para a aplicação DarkMaker (Versão Estável e Otimizada)
+// server.js - Backend para a aplicação DarkMaker
 
+// 1. Importação de Módulos
 const express = require('express');
 const multer = require('multer');
 const { exec } = require('child_process');
@@ -7,22 +8,20 @@ const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 
+// 2. Configuração Inicial
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Pastas
+// Cria as pastas necessárias de forma síncrona ao iniciar
 const uploadDir = path.join(__dirname, 'uploads');
 const processedDir = path.join(__dirname, 'processed');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
-// Garante que as pastas existem
-[uploadDir, processedDir].forEach(dir => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
-
-// Middlewares
+// 3. Middlewares
 app.use(cors());
 app.use(express.json());
-app.use('/downloads', express.static(processedDir)); // rota pública para downloads
+app.use('/downloads', express.static(processedDir));
 
 // Configuração do Multer
 const storage = multer.diskStorage({
@@ -32,32 +31,29 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${safeOriginalName}`);
   }
 });
-const upload = multer({
-  storage,
-  limits: { fileSize: 500 * 1024 * 1024 } // limite 500MB
-});
+const upload = multer({ storage: storage });
 
-// Funções auxiliares
+// 4. Funções Auxiliares
 function runFFmpeg(command, options = {}) {
   return new Promise((resolve, reject) => {
     console.log(`Executando FFmpeg: ${command}`);
     exec(command, options, (error, stdout, stderr) => {
       if (error) {
-        console.error(`FFmpeg Erro: ${stderr}`);
-        return reject(new Error(`Erro no FFmpeg: ${stderr || 'Desconhecido'}`));
+        console.error(`FFmpeg Stderr: ${stderr}`);
+        return reject(new Error(`Erro no FFmpeg: ${stderr || 'Erro desconhecido'}`));
       }
-      console.log(`FFmpeg OK: ${stdout}`);
-      resolve(true);
+      console.log(`FFmpeg Stdout: ${stdout}`);
+      resolve();
     });
   });
 }
 
 function getMediaDuration(filePath) {
   return new Promise((resolve, reject) => {
-    const cmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
-    exec(cmd, (error, stdout, stderr) => {
+    const command = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
+    exec(command, (error, stdout, stderr) => {
       if (error) {
-        console.error(`ffprobe Erro: ${stderr}`);
+        console.error(`FFprobe Stderr: ${stderr}`);
         return reject(new Error(`Erro no ffprobe: ${stderr}`));
       }
       resolve(parseFloat(stdout));
@@ -65,142 +61,167 @@ function getMediaDuration(filePath) {
   });
 }
 
-// Limpeza automática de arquivos com mais de 24h
-setInterval(() => {
-  const limite = Date.now() - 24 * 60 * 60 * 1000;
-  [uploadDir, processedDir].forEach(dir => {
-    fs.readdirSync(dir).forEach(file => {
-      const filePath = path.join(dir, file);
-      if (fs.statSync(filePath).mtime.getTime() < limite) {
-        fs.unlinkSync(filePath);
-        console.log(`🗑 Arquivo apagado: ${filePath}`);
-      }
-    });
-  });
-}, 3600000); // a cada 1 hora
+// 5. Rotas
+app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 
-// Rotas
-app.get('/', (req, res) => res.send('✅ Backend DarkMaker está rodando!'));
-
-// -------------------- Cortar vídeo --------------------
+// Cortar vídeo
 app.post('/cortar-video', upload.single('videos'), async (req, res) => {
-  if (!req.file) return res.status(400).send('Nenhum arquivo enviado.');
-  const { startTime, endTime } = req.body;
-  if (!startTime || !endTime) return res.status(400).send('Tempos de início e fim obrigatórios.');
-
-  const inputPath = req.file.path;
+  const inputPath = req.file?.path;
   const outputPath = path.join(processedDir, `cortado-${req.file.filename}`);
+
+  if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
+  const { startTime, endTime } = req.body;
+  if (!startTime || !endTime) return res.status(400).send('Tempos obrigatórios.');
 
   try {
     await runFFmpeg(`ffmpeg -i "${inputPath}" -ss ${startTime} -to ${endTime} -c copy "${outputPath}"`);
-    res.json({ url: `/downloads/${path.basename(outputPath)}` });
-  } catch (error) {
-    res.status(500).send(error.message);
+    res.download(outputPath, () => {
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(outputPath);
+    });
+  } catch (e) {
+    fs.unlinkSync(inputPath);
+    res.status(500).send(e.message);
   }
 });
 
-// -------------------- Unir vídeos --------------------
+// Unir vídeos
 app.post('/unir-videos', upload.array('videos'), async (req, res) => {
-  if (req.files.length < 2) return res.status(400).send('Envie pelo menos dois vídeos.');
-  const listFile = path.join(uploadDir, `list-${Date.now()}.txt`);
-  fs.writeFileSync(listFile, req.files.map(f => `file '${f.filename}'`).join('\n'));
+  const files = req.files || [];
+  if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
+
+  const fileListPath = path.join(uploadDir, `list-${Date.now()}.txt`);
   const outputPath = path.join(processedDir, `unido-${Date.now()}.mp4`);
 
+  const fileContent = files
+    .map(f => `file '${f.path.replace(/'/g, "'\\''")}'`)
+    .join('\n');
+  fs.writeFileSync(fileListPath, fileContent);
+
   try {
-    await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${path.basename(listFile)}" -vcodec libx264 -crf 23 -preset veryfast "${outputPath}"`, { cwd: uploadDir });
-    res.json({ url: `/downloads/${path.basename(outputPath)}` });
-  } catch (error) {
-    res.status(500).send(error.message);
+    await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`);
+    res.download(outputPath, () => {
+      files.forEach(f => fs.unlinkSync(f.path));
+      fs.unlinkSync(fileListPath);
+      fs.unlinkSync(outputPath);
+    });
+  } catch (e) {
+    res.status(500).send(e.message);
   }
 });
 
-// -------------------- Comprimir vídeo --------------------
+// Comprimir vídeo
 app.post('/comprimir-videos', upload.single('videos'), async (req, res) => {
-  if (!req.file) return res.status(400).send('Nenhum arquivo enviado.');
-  const { quality } = req.body;
+  const inputPath = req.file?.path;
+  if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
   const crfMap = { alta: '18', media: '23', baixa: '28' };
-  const crf = crfMap[quality] || '23';
-
-  const inputPath = req.file.path;
+  const crf = crfMap[req.body.quality] || '23';
   const outputPath = path.join(processedDir, `comprimido-${req.file.filename}`);
 
   try {
     await runFFmpeg(`ffmpeg -i "${inputPath}" -vcodec libx264 -crf ${crf} "${outputPath}"`);
-    res.json({ url: `/downloads/${path.basename(outputPath)}` });
-  } catch (error) {
-    res.status(500).send(error.message);
+    res.download(outputPath, () => {
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(outputPath);
+    });
+  } catch (e) {
+    res.status(500).send(e.message);
   }
 });
 
-// -------------------- Embaralhar vídeos --------------------
+// Embaralhar vídeos
 app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
-  if (req.files.length < 2) return res.status(400).send('Envie pelo menos dois vídeos.');
-  const shuffled = [...req.files].sort(() => Math.random() - 0.5);
-  const listFile = path.join(uploadDir, `list-emb-${Date.now()}.txt`);
-  fs.writeFileSync(listFile, shuffled.map(f => `file '${f.filename}'`).join('\n'));
+  const files = req.files || [];
+  if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
+
+  const shuffled = files.sort(() => Math.random() - 0.5);
+  const fileListPath = path.join(uploadDir, `list-shuf-${Date.now()}.txt`);
   const outputPath = path.join(processedDir, `embaralhado-${Date.now()}.mp4`);
 
+  const fileContent = shuffled
+    .map(f => `file '${f.path.replace(/'/g, "'\\''")}'`)
+    .join('\n');
+  fs.writeFileSync(fileListPath, fileContent);
+
   try {
-    await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${path.basename(listFile)}" -vcodec libx264 -crf 23 -preset veryfast "${outputPath}"`, { cwd: uploadDir });
-    res.json({ url: `/downloads/${path.basename(outputPath)}` });
-  } catch (error) {
-    res.status(500).send(error.message);
+    await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`);
+    res.download(outputPath, () => {
+      files.forEach(f => fs.unlinkSync(f.path));
+      fs.unlinkSync(fileListPath);
+      fs.unlinkSync(outputPath);
+    });
+  } catch (e) {
+    res.status(500).send(e.message);
   }
 });
 
-// -------------------- Remover áudio/metadados --------------------
+// Remover áudio/metadados
 app.post('/remover-audio', upload.single('videos'), async (req, res) => {
-  if (!req.file) return res.status(400).send('Nenhum arquivo enviado.');
-  const { removeAudio, removeMetadata } = req.body;
-  let flags = '-c:v copy';
-  if (removeAudio === 'true') flags += ' -an';
-  else flags += ' -c:a copy';
-  if (removeMetadata === 'true') flags += ' -map_metadata -1';
+  const inputPath = req.file?.path;
+  if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
 
-  if (removeAudio !== 'true' && removeMetadata !== 'true')
-    return res.status(400).send('Nenhuma opção selecionada.');
-
-  const inputPath = req.file.path;
   const outputPath = path.join(processedDir, `processado-${req.file.filename}`);
+  let flags = '-c:v copy';
+  if (req.body.removeAudio === 'true') flags += ' -an';
+  else flags += ' -c:a copy';
+  if (req.body.removeMetadata === 'true') flags += ' -map_metadata -1';
+
+  if (req.body.removeAudio !== 'true' && req.body.removeMetadata !== 'true') {
+    return res.status(400).send('Nenhuma opção selecionada.');
+  }
 
   try {
     await runFFmpeg(`ffmpeg -i "${inputPath}" ${flags} "${outputPath}"`);
-    res.json({ url: `/downloads/${path.basename(outputPath)}` });
-  } catch (error) {
-    res.status(500).send(error.message);
+    res.download(outputPath, () => {
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(outputPath);
+    });
+  } catch (e) {
+    res.status(500).send(e.message);
   }
 });
 
-// -------------------- Criar vídeo automático --------------------
+// Criar vídeo automático
 app.post('/criar-video-automatico', upload.fields([
   { name: 'narration', maxCount: 1 },
   { name: 'media', maxCount: 50 }
 ]), async (req, res) => {
   const narrationFile = req.files.narration?.[0];
   const mediaFiles = req.files.media || [];
-  if (!narrationFile || mediaFiles.length === 0)
-    return res.status(400).send('Narração e pelo menos uma imagem são obrigatórias.');
 
-  const fileList = path.join(uploadDir, `list-auto-${Date.now()}.txt`);
-  const silentVideo = path.join(processedDir, `silent-${Date.now()}.mp4`);
+  if (!narrationFile || mediaFiles.length === 0) {
+    return res.status(400).send('Narração e pelo menos um ficheiro de media são obrigatórios.');
+  }
+
+  const fileListPath = path.join(uploadDir, `list-auto-${Date.now()}.txt`);
+  const silentVideoPath = path.join(processedDir, `silent-${Date.now()}.mp4`);
   const outputPath = path.join(processedDir, `automatico-${Date.now()}.mp4`);
 
   try {
     const audioDuration = await getMediaDuration(narrationFile.path);
-    const dur = audioDuration / mediaFiles.length;
-    fs.writeFileSync(fileList, mediaFiles.map(f => `file '${f.filename}'\nduration ${dur}`).join('\n'));
+    const durationPerImage = audioDuration / mediaFiles.length;
 
-    await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${path.basename(fileList)}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p" -vcodec libx264 -r 25 -y "${silentVideo}"`, { cwd: uploadDir });
+    const fileContent = mediaFiles
+      .map(f => `file '${f.path.replace(/'/g, "'\\''")}'\nduration ${durationPerImage}`)
+      .join('\n');
+    fs.writeFileSync(fileListPath, fileContent);
 
-    await runFFmpeg(`ffmpeg -i "${silentVideo}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest "${outputPath}"`);
+    await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -r 25 -y "${silentVideoPath}"`);
+    await runFFmpeg(`ffmpeg -i "${silentVideoPath}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest "${outputPath}"`);
 
-    res.json({ url: `/downloads/${path.basename(outputPath)}` });
-  } catch (error) {
-    res.status(500).send(error.message);
+    res.download(outputPath, () => {
+      fs.unlinkSync(narrationFile.path);
+      mediaFiles.forEach(f => fs.unlinkSync(f.path));
+      fs.unlinkSync(fileListPath);
+      fs.unlinkSync(silentVideoPath);
+      fs.unlinkSync(outputPath);
+    });
+  } catch (e) {
+    res.status(500).send(e.message);
   }
 });
 
-// Inicia servidor
+// 6. Iniciar Servidor
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando na porta ${PORT}`);
+  console.log(`Servidor a correr na porta ${PORT}`);
 });
