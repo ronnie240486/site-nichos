@@ -204,12 +204,16 @@ app.post('/criar-video-automatico', upload.fields([
     const fileContent = mediaFiles
       .map(f => `file '${f.path.replace(/'/g, "'\\''")}'\nduration ${durationPerImage}`)
       .join('\n');
-    fs.writeFileSync(fileListPath, fileContent);
+
+    const lastFile = mediaFiles[mediaFiles.length - 1].path.replace(/'/g, "'\\''");
+    const finalContent = `${fileContent}\nfile '${lastFile}'`;
+
+    fs.writeFileSync(fileListPath, finalContent);
 
     await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -r 25 -y "${silentVideoPath}"`);
-    await runFFmpeg(`ffmpeg -i "${silentVideoPath}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest "${outputPath}"`);
+    await runFFmpeg(`ffmpeg -i "${silentVideoPath}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest -y "${outputPath}"`);
 
-    res.download(outputPath, () => {
+    res.download(outputPath, path.basename(outputPath), () => {
       fs.unlinkSync(narrationFile.path);
       mediaFiles.forEach(f => fs.unlinkSync(f.path));
       fs.unlinkSync(fileListPath);
@@ -221,7 +225,9 @@ app.post('/criar-video-automatico', upload.fields([
   }
 });
 
+
 // 6. Iniciar Servidor
 app.listen(PORT, () => {
   console.log(`Servidor a correr na porta ${PORT}`);
 });
+
