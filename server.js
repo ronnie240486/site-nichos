@@ -67,26 +67,32 @@ app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 // Rota para Cortar Vídeo
 app.post('/cortar-video', upload.single('videos'), async (req, res) => {
   const inputPath = req.file ? req.file.path : null;
+  const outputPath = inputPath ? path.join(processedDir, `cortado-${req.file.filename}`) : null;
+
+  const cleanup = () => {
+    if (inputPath && fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+    if (outputPath && fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+  };
+
   if (!inputPath) return res.status(400).send('Nenhum ficheiro de vídeo enviado.');
   
   const { startTime, endTime } = req.body;
   if (!startTime || !endTime) {
-    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+    cleanup();
     return res.status(400).send('Tempos de início e fim são obrigatórios.');
   }
 
-  const outputFilename = `cortado-${req.file.filename}`;
-  const outputPath = path.join(processedDir, outputFilename);
   const command = `ffmpeg -i "${inputPath}" -ss ${startTime} -to ${endTime} -c copy "${outputPath}"`;
 
   try {
     await runFFmpeg(command);
-    res.download(outputPath, outputFilename);
+    res.download(outputPath, path.basename(outputPath), (err) => {
+      if (err) console.error("Erro ao enviar o ficheiro:", err);
+      cleanup();
+    });
   } catch (error) {
+    cleanup();
     res.status(500).send(error.message);
-  } finally {
-    if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
   }
 });
 
@@ -95,10 +101,13 @@ app.post('/unir-videos', upload.array('videos'), async (req, res) => {
   const files = req.files || [];
   const filePaths = files.map(f => f.path);
   const fileListPath = path.join(uploadDir, `list-${Date.now()}.txt`);
+  const outputFilename = `unido-${Date.now()}.mp4`;
+  const outputPath = path.join(processedDir, outputFilename);
 
   const cleanup = () => {
     filePaths.forEach(p => { if (fs.existsSync(p)) fs.unlinkSync(p); });
     if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
+    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
   };
 
   if (files.length < 2) {
@@ -106,21 +115,20 @@ app.post('/unir-videos', upload.array('videos'), async (req, res) => {
     return res.status(400).send('Pelo menos dois vídeos são necessários para unir.');
   }
 
-  const fileContent = files.map(f => `file '${f.filename}'`).join('\n');
+  const fileContent = filePaths.map(p => `file '${p}'`).join('\n');
   fs.writeFileSync(fileListPath, fileContent);
 
-  const outputFilename = `unido-${Date.now()}.mp4`;
-  const outputPath = path.join(processedDir, outputFilename);
-  const command = `ffmpeg -f concat -safe 0 -i "${path.basename(fileListPath)}" -c copy "${outputPath}"`;
+  const command = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`;
 
   try {
-    await runFFmpeg(command, { cwd: uploadDir });
-    res.download(outputPath, outputFilename);
+    await runFFmpeg(command);
+    res.download(outputPath, outputFilename, (err) => {
+      if (err) console.error("Erro ao enviar o ficheiro:", err);
+      cleanup();
+    });
   } catch (error) {
-    res.status(500).send(error.message);
-  } finally {
     cleanup();
-    if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+    res.status(500).send(error.message);
   }
 });
 
@@ -129,22 +137,28 @@ app.post('/comprimir-videos', upload.single('videos'), async (req, res) => {
     const inputPath = req.file ? req.file.path : null;
     if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
 
+    const outputFilename = `comprimido-${req.file.filename}`;
+    const outputPath = path.join(processedDir, outputFilename);
+    const cleanup = () => {
+      if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+    };
+
     const { quality } = req.body;
     const crfMap = { alta: '18', media: '23', baixa: '28' };
     const crf = crfMap[quality] || '23';
 
-    const outputFilename = `comprimido-${req.file.filename}`;
-    const outputPath = path.join(processedDir, outputFilename);
     const command = `ffmpeg -i "${inputPath}" -vcodec libx264 -crf ${crf} "${outputPath}"`;
 
     try {
         await runFFmpeg(command);
-        res.download(outputPath, outputFilename);
+        res.download(outputPath, outputFilename, (err) => {
+            if (err) console.error("Erro ao enviar o ficheiro:", err);
+            cleanup();
+        });
     } catch (error) {
+        cleanup();
         res.status(500).send(error.message);
-    } finally {
-        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
     }
 });
 
@@ -153,10 +167,13 @@ app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     const filePaths = files.map(f => f.path);
     const fileListPath = path.join(uploadDir, `list-embaralhada-${Date.now()}.txt`);
+    const outputFilename = `embaralhado-${Date.now()}.mp4`;
+    const outputPath = path.join(processedDir, outputFilename);
 
     const cleanup = () => {
       filePaths.forEach(p => { if (fs.existsSync(p)) fs.unlinkSync(p); });
       if (fs.existsSync(fileListPath)) fs.unlinkSync(fileListPath);
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
     };
 
     if (files.length < 2) {
@@ -164,22 +181,21 @@ app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
       return res.status(400).send('Pelo menos dois vídeos são necessários para embaralhar.');
     }
 
-    let shuffledFiles = files.sort(() => Math.random() - 0.5);
-    const fileContent = shuffledFiles.map(f => `file '${f.filename}'`).join('\n');
+    let shuffledPaths = filePaths.sort(() => Math.random() - 0.5);
+    const fileContent = shuffledPaths.map(p => `file '${p}'`).join('\n');
     fs.writeFileSync(fileListPath, fileContent);
 
-    const outputFilename = `embaralhado-${Date.now()}.mp4`;
-    const outputPath = path.join(processedDir, outputFilename);
-    const command = `ffmpeg -f concat -safe 0 -i "${path.basename(fileListPath)}" -c copy "${outputPath}"`;
+    const command = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`;
 
     try {
-        await runFFmpeg(command, { cwd: uploadDir });
-        res.download(outputPath, outputFilename);
+        await runFFmpeg(command);
+        res.download(outputPath, outputFilename, (err) => {
+            if (err) console.error("Erro ao enviar o ficheiro:", err);
+            cleanup();
+        });
     } catch (error) {
-        res.status(500).send(error.message);
-    } finally {
         cleanup();
-        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+        res.status(500).send(error.message);
     }
 });
 
@@ -187,11 +203,15 @@ app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
 app.post('/remover-audio', upload.single('videos'), async (req, res) => {
     const inputPath = req.file ? req.file.path : null;
     if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
-    
-    const { removeAudio, removeMetadata } = req.body;
+
     const outputFilename = `processado-${req.file.filename}`;
     const outputPath = path.join(processedDir, outputFilename);
-
+    const cleanup = () => {
+      if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+    };
+    
+    const { removeAudio, removeMetadata } = req.body;
     let flags = '-c:v copy'; 
     if (removeAudio === 'true') {
         flags += ' -an';
@@ -203,7 +223,7 @@ app.post('/remover-audio', upload.single('videos'), async (req, res) => {
     }
 
     if (removeAudio !== 'true' && removeMetadata !== 'true') {
-        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
+        cleanup();
         return res.status(400).send('Nenhuma opção de remoção selecionada.');
     }
 
@@ -211,12 +231,13 @@ app.post('/remover-audio', upload.single('videos'), async (req, res) => {
 
     try {
         await runFFmpeg(command);
-        res.download(outputPath, outputFilename);
+        res.download(outputPath, outputFilename, (err) => {
+            if (err) console.error("Erro ao enviar o ficheiro:", err);
+            cleanup();
+        });
     } catch (error) {
+        cleanup();
         res.status(500).send(error.message);
-    } finally {
-        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-        if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
     }
 });
 
@@ -255,22 +276,26 @@ app.post('/criar-video-automatico', upload.fields([
     const audioDuration = await getMediaDuration(narrationFile.path);
     const durationPerImage = audioDuration / mediaFiles.length;
 
-    const fileContent = mediaFiles.map(f => `file '${f.filename}'\nduration ${durationPerImage}`).join('\n');
+    const fileContent = mediaFiles.map(f => `file '${f.path}'\nduration ${durationPerImage}`).join('\n');
     fs.writeFileSync(fileListPath, fileContent);
     
-    const createSilentVideoCmd = `ffmpeg -f concat -safe 0 -i "${path.basename(fileListPath)}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p" -c:v libx264 -r 25 -y "${silentVideoPath}"`;
-    await runFFmpeg(createSilentVideoCmd, { cwd: uploadDir });
+    const createSilentVideoCmd = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p" -c:v libx264 -r 25 -y "${silentVideoPath}"`;
+    await runFFmpeg(createSilentVideoCmd);
 
     const addAudioCmd = `ffmpeg -i "${silentVideoPath}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest "${outputPath}"`;
     await runFFmpeg(addAudioCmd);
     
-    res.download(outputPath, outputFilename);
+    res.download(outputPath, outputFilename, (err) => {
+      if (err) console.error("Erro ao enviar o ficheiro:", err);
+      cleanup();
+    });
+
   } catch (error) {
-    res.status(500).send(error.message);
-  } finally {
     cleanup();
+    res.status(500).send(error.message);
   }
 });
+
 
 // 6. Iniciar o Servidor
 app.listen(PORT, () => {
