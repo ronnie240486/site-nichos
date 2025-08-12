@@ -1,345 +1,227 @@
-// server.js - Backend para a aplicação DarkMaker
-
-// 1. Importação de Módulos
+// server.js - Fluxo completo: yt-dlp -> whisper (OpenAI) -> reescrita (OpenAI) -> ElevenLabs TTS -> FFmpeg
+require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
-const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const cors = require('cors');
-const { YoutubeTranscript } = require('youtube-transcript');
+const { exec } = require('child_process');
+const axios = require('axios');
+const FormData = require('form-data');
 
-// 2. Configuração Inicial
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Cria as pastas necessárias de forma síncrona ao iniciar
-const uploadDir = path.join(__dirname, 'uploads');
-const processedDir = path.join(__dirname, 'processed');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
+// --- Helpers: ensure dir + safe unlink ---
+function ensureDir(dirPath) {
+  if (fs.existsSync(dirPath)) {
+    if (!fs.lstatSync(dirPath).isDirectory()) {
+      fs.unlinkSync(dirPath);
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+  } else {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+function safeUnlink(p) {
+  try { if (p && fs.existsSync(p) && fs.lstatSync(p).isFile()) fs.unlinkSync(p); } catch (e) { console.error('safeUnlink failed', p, e.message); }
+}
 
-// 3. Middlewares
-app.use(cors());
-app.use(express.json());
-app.use('/downloads', express.static(processedDir));
+// --- Temporários (use /tmp para Render) ---
+const TMP = process.env.TMPDIR || '/tmp';
+const UPLOAD_DIR = path.join(TMP, 'darkmaker_uploads');
+const PROCESS_DIR = path.join(TMP, 'darkmaker_processed');
+ensureDir(UPLOAD_DIR);
+ensureDir(PROCESS_DIR);
 
-// Configuração do Multer
+// --- Multer (salva em /tmp) ---
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
-    const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    cb(null, `${Date.now()}-${safeOriginalName}`);
+    const name = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${Date.now()}-${name}`);
   }
 });
-const upload = multer({ storage: storage });
+const upload = multer({ storage, limits: { fileSize: 1024 * 1024 * 1024 } }); // 1GB limite (ajuste)
 
-// 4. Funções Auxiliares
-function runFFmpeg(command, options = {}) {
+// --- Exec util ---
+function runCmd(cmd, opts = {}) {
   return new Promise((resolve, reject) => {
-    console.log(`Executando FFmpeg: ${command}`);
-    exec(command, options, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`FFmpeg Stderr: ${stderr}`);
-        return reject(new Error(`Erro no FFmpeg: ${stderr || 'Erro desconhecido'}`));
+    console.log('[CMD]', cmd);
+    exec(cmd, opts, (err, stdout, stderr) => {
+      if (err) {
+        console.error('[CMD ERR]', stderr || err.message);
+        return reject(new Error(stderr || err.message));
       }
-      console.log(`FFmpeg Stdout: ${stdout}`);
-      resolve();
+      resolve({ stdout, stderr });
     });
   });
 }
 
-function getMediaDuration(filePath) {
-  return new Promise((resolve, reject) => {
-    const command = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        console.error(`FFprobe Stderr: ${stderr}`);
-        return reject(new Error(`Erro no ffprobe: ${stderr}`));
-      }
-      resolve(parseFloat(stdout));
-    });
+// --- OpenAI transcription (Whisper) via API v1/audio/transcriptions ---
+async function transcribeWithOpenAI(filePath) {
+  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY missing');
+  const form = new FormData();
+  form.append('file', fs.createReadStream(filePath));
+  form.append('model', 'whisper-1'); // se a conta tiver este modelo
+  // se quiser idioma fixo: form.append('language', 'pt');
+
+  const res = await axios.post('https://api.openai.com/v1/audio/transcriptions', form, {
+    headers: {
+      ...form.getHeaders(),
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+    },
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity
   });
+  return res.data.text || '';
 }
 
-// 5. Rotas
-app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
+// --- OpenAI chat rewrite (exemplo com chat completions em endpoint moderno) ---
+async function rewriteTextWithOpenAI(promptText) {
+  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY missing');
+  // Simples prompt: reescreve como roteiro curto e chamativo
+  const system = "Você transforma uma transcrição em roteiro curto e direto, com frases curtas para vídeo, pontos principais e CTA no final.";
+  const user = `Transcrição:\n${promptText}\n\nResponda com o roteiro reescrito.`;
+  const payload = {
+    model: 'gpt-4o-mini', // use o modelo disponível na sua conta; substitua se necessário
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user }
+    ],
+    max_tokens: 800
+  };
+  const res = await axios.post('https://api.openai.com/v1/chat/completions', payload, {
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+  });
+  const text = res.data?.choices?.[0]?.message?.content;
+  return text || promptText;
+}
 
-// --- ROTA PARA EXTRAIR ROTEIRO DO YOUTUBE ---
-app.post('/extrair-roteiro', async (req, res) => {
-  const { url } = req.body;
+// --- ElevenLabs TTS (gera arquivo mp3) ---
+async function generateVoiceWithEleven(text, outPath, voice = 'Rachel') {
+  if (!process.env.ELEVENLABS_API_KEY) throw new Error('ELEVENLABS_API_KEY missing');
+  // ElevenLabs API: https://api.elevenlabs.io/v1/text-to-speech/{voice_id}
+  // Primeiro, obter voice_id ou usar um preset. Aqui assumimos que voice param é ID or name - user must map.
+  // Simples implementation: use voice ID in env or default voice id.
+  const ELEVEN_VOICE_ID = process.env.ELEVEN_VOICE_ID || voice; // set voice id in env ideally
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${ELEVEN_VOICE_ID}`;
+  const response = await axios.post(url, { text }, {
+    headers: {
+      'xi-api-key': process.env.ELEVENLABS_API_KEY,
+      'Content-Type': 'application/json'
+    },
+    responseType: 'arraybuffer'
+  });
+  fs.writeFileSync(outPath, response.data);
+  return outPath;
+}
 
-  if (!url) {
-    return res.status(400).json({ error: 'URL do YouTube não fornecida.' });
-  }
-
-  try {
-    const transcript = await YoutubeTranscript.fetchTranscript(url);
-    if (!transcript || transcript.length === 0) {
-      return res.status(404).json({ error: 'Nenhuma transcrição encontrada para este vídeo.' });
-    }
-    const roteiroCompleto = transcript.map(item => item.text).join(' ');
-    res.json({ roteiro: roteiroCompleto });
-  } catch (error) {
-    console.error("Erro ao buscar transcrição:", error.message);
-    res.status(500).json({ error: 'Falha ao processar o vídeo. Verifique se a URL está correta e se o vídeo possui legendas.' });
-  }
-});
-
-// --- ROTAS DE PROCESSAMENTO DE VÍDEO ---
-
-app.post('/cortar-video', upload.single('media'), async (req, res) => {
-  const inputPath = req.file?.path;
-  if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
-  const { startTime, endTime } = req.body;
-  if (!startTime || !endTime) return res.status(400).send('Tempos obrigatórios.');
-  const outputPath = path.join(processedDir, `cortado-${req.file.filename}`);
-  try {
-    await runFFmpeg(`ffmpeg -i "${inputPath}" -ss ${startTime} -to ${endTime} -c copy "${outputPath}"`);
-    res.download(outputPath, () => {
-      fs.unlinkSync(inputPath);
-      fs.unlinkSync(outputPath);
-    });
-  } catch (e) {
-    fs.unlinkSync(inputPath);
-    res.status(500).send(e.message);
-  }
-});
-
-app.post('/unir-videos', upload.array('media'), async (req, res) => {
-  const files = req.files || [];
-  if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
-  const fileListPath = path.join(uploadDir, `list-${Date.now()}.txt`);
-  const outputPath = path.join(processedDir, `unido-${Date.now()}.mp4`);
-  const fileContent = files.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
-  fs.writeFileSync(fileListPath, fileContent);
-  try {
-    await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`);
-    res.download(outputPath, () => {
-      files.forEach(f => fs.unlinkSync(f.path));
-      fs.unlinkSync(fileListPath);
-      fs.unlinkSync(outputPath);
-    });
-  } catch (e) {
-    res.status(500).send(e.message);
-  }
-});
-
-app.post('/comprimir-videos', upload.single('media'), async (req, res) => {
-  const inputPath = req.file?.path;
-  if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
-  const crfMap = { alta: '18', media: '23', baixa: '28' };
-  const crf = crfMap[req.body.quality] || '23';
-  const outputPath = path.join(processedDir, `comprimido-${req.file.filename}`);
-  try {
-    await runFFmpeg(`ffmpeg -i "${inputPath}" -vcodec libx264 -crf ${crf} "${outputPath}"`);
-    res.download(outputPath, () => {
-      fs.unlinkSync(inputPath);
-      fs.unlinkSync(outputPath);
-    });
-  } catch (e) {
-    res.status(500).send(e.message);
-  }
-});
-
-app.post('/embaralhar-videos', upload.array('media'), async (req, res) => {
-    const files = req.files || [];
-    if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
-    const shuffled = files.sort(() => Math.random() - 0.5);
-    const fileListPath = path.join(uploadDir, `list-shuf-${Date.now()}.txt`);
-    const outputPath = path.join(processedDir, `embaralhado-${Date.now()}.mp4`);
-    const fileContent = shuffled.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
-    fs.writeFileSync(fileListPath, fileContent);
-    try {
-        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`);
-        res.download(outputPath, () => {
-            files.forEach(f => fs.unlinkSync(f.path));
-            fs.unlinkSync(fileListPath);
-            fs.unlinkSync(outputPath);
-        });
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
-});
-
-app.post('/remover-audio', upload.single('media'), async (req, res) => {
-    const inputPath = req.file?.path;
-    if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
-    const outputPath = path.join(processedDir, `processado-${req.file.filename}`);
-    let flags = '-c:v copy';
-    if (req.body.removeAudio === 'true') flags += ' -an';
-    else flags += ' -c:a copy';
-    if (req.body.removeMetadata === 'true') flags += ' -map_metadata -1';
-    if (req.body.removeAudio !== 'true' && req.body.removeMetadata !== 'true') {
-        return res.status(400).send('Nenhuma opção selecionada.');
-    }
-    try {
-        await runFFmpeg(`ffmpeg -i "${inputPath}" ${flags} "${outputPath}"`);
-        res.download(outputPath, () => {
-            fs.unlinkSync(inputPath);
-            fs.unlinkSync(outputPath);
-        });
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
-});
-
-// --- ROTAS DE PROCESSAMENTO DE ÁUDIO ---
-
-app.post('/unir-audio', upload.array('media'), async (req, res) => {
-    const files = req.files || [];
-    if (files.length < 2) return res.status(400).send('Mínimo 2 ficheiros de áudio.');
-    const fileListPath = path.join(uploadDir, `list-audio-${Date.now()}.txt`);
-    const outputPath = path.join(processedDir, `unido-${Date.now()}.mp3`);
-    const fileContent = files.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
-    fs.writeFileSync(fileListPath, fileContent);
-    try {
-        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c:a libmp3lame -q:a 2 "${outputPath}"`);
-        res.download(outputPath, () => {
-            files.forEach(f => fs.unlinkSync(f.path));
-            fs.unlinkSync(fileListPath);
-            fs.unlinkSync(outputPath);
-        });
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
-});
-
-app.post('/limpar-metadados-audio', upload.single('media'), async (req, res) => {
-    const inputPath = req.file?.path;
-    if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
-    const outputPath = path.join(processedDir, `limpo-${path.basename(inputPath)}`);
-    try {
-        await runFFmpeg(`ffmpeg -i "${inputPath}" -map_metadata -1 -c:a copy "${outputPath}"`);
-        res.download(outputPath, () => {
-            fs.unlinkSync(inputPath);
-            fs.unlinkSync(outputPath);
-        });
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
-});
-
-app.post('/extrair-audio', upload.single('media'), async (req, res) => {
-    const inputPath = req.file?.path;
-    if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
-    const outputFilename = `${path.parse(req.file.filename).name}.mp3`;
-    const outputPath = path.join(processedDir, outputFilename);
-    try {
-        await runFFmpeg(`ffmpeg -i "${inputPath}" -vn -c:a libmp3lame -q:a 2 "${outputPath}"`);
-        res.download(outputPath, () => {
-            fs.unlinkSync(inputPath);
-            fs.unlinkSync(outputPath);
-        });
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
-});
-
-app.post('/embaralhar-audio', upload.array('media'), async (req, res) => {
-    const files = req.files || [];
-    if (files.length < 2) return res.status(400).send('Mínimo 2 ficheiros de áudio.');
-    const shuffled = files.sort(() => Math.random() - 0.5);
-    const fileListPath = path.join(uploadDir, `list-audio-shuf-${Date.now()}.txt`);
-    const outputPath = path.join(processedDir, `embaralhado-${Date.now()}.mp3`);
-    const fileContent = shuffled.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
-    fs.writeFileSync(fileListPath, fileContent);
-    try {
-        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c:a libmp3lame -q:a 2 "${outputPath}"`);
-        res.download(outputPath, () => {
-            files.forEach(f => fs.unlinkSync(f.path));
-            fs.unlinkSync(fileListPath);
-            fs.unlinkSync(outputPath);
-        });
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
-});
-
-app.post('/melhorar-audio', upload.single('media'), async (req, res) => {
-    const inputPath = req.file?.path;
-    if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
-    const { removeNoise, normalizeVolume } = req.body;
-    let filters = [];
-    if (removeNoise === 'true') filters.push('anlmdn');
-    if (normalizeVolume === 'true') filters.push('loudnorm');
-    const filterString = filters.length > 0 ? `-af "${filters.join(',')}"` : '';
-    const outputPath = path.join(processedDir, `melhorado-${path.basename(inputPath)}`);
-    try {
-        await runFFmpeg(`ffmpeg -i "${inputPath}" ${filterString} "${outputPath}"`);
-        res.download(outputPath, () => {
-            fs.unlinkSync(inputPath);
-            fs.unlinkSync(outputPath);
-        });
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
-});
-
-app.post('/remover-silencio', upload.single('media'), async (req, res) => {
-    const inputPath = req.file?.path;
-    if (!inputPath) return res.status(400).send('Nenhum ficheiro enviado.');
-    const threshold = req.body.silenceThreshold || '-30dB';
-    const duration = req.body.silenceDuration || '1';
-    const outputPath = path.join(processedDir, `sem-silencio-${path.basename(inputPath)}`);
-    try {
-        await runFFmpeg(`ffmpeg -i "${inputPath}" -af silenceremove=stop_periods=-1:stop_duration=${duration}:stop_threshold=${threshold} "${outputPath}"`);
-        res.download(outputPath, () => {
-            fs.unlinkSync(inputPath);
-            fs.unlinkSync(outputPath);
-        });
-    } catch (e) {
-        res.status(500).send(e.message);
-    }
-});
-
-// --- ROTA DE CRIAÇÃO DE VÍDEO AUTOMÁTICO ---
-
-app.post('/criar-video-automatico', upload.fields([
+// --- Endpoint integrado: recebe youtubeUrl OR narration audio + media images ---
+// fields:
+// - youtubeUrl (form field string) OR narration (file)
+// - media (images files, optional)
+// - useEleven = 'true' to synthesize voice from rewritten script
+app.post('/criar-video-automatico-integrado', upload.fields([
   { name: 'narration', maxCount: 1 },
   { name: 'media', maxCount: 50 }
 ]), async (req, res) => {
-  const narrationFile = req.files.narration?.[0];
-  const mediaFiles = req.files.media || [];
-
-  if (!narrationFile || mediaFiles.length === 0) {
-    return res.status(400).send('Narração e pelo menos um ficheiro de media são obrigatórios.');
-  }
-
-  const fileListPath = path.join(uploadDir, `list-auto-${Date.now()}.txt`);
-  const silentVideoPath = path.join(processedDir, `silent-${Date.now()}.mp4`);
-  const outputPath = path.join(processedDir, `automatico-${Date.now()}.mp4`);
-
+  const tempFiles = []; // para limpeza
   try {
-    const audioDuration = await getMediaDuration(narrationFile.path);
-    const durationPerImage = audioDuration / mediaFiles.length;
+    const youtubeUrl = (req.body.youtubeUrl || '').trim();
+    let narrationFile = req.files?.narration?.[0] || null;
+    const mediaFiles = req.files?.media || [];
 
-    const fileContent = mediaFiles
-      .map(f => `file '${f.path.replace(/'/g, "'\\''")}'\nduration ${durationPerImage}`)
-      .join('\n');
+    // 1) Se veio youtubeUrl, baixar áudio com yt-dlp
+    if (youtubeUrl) {
+      const outAudio = path.join(UPLOAD_DIR, `yt_audio_${Date.now()}.mp3`);
+      // yt-dlp command: baixa e converte direto para mp3
+      // necessita yt-dlp + ffmpeg instalados no container
+      const safeUrl = youtubeUrl.replace(/"/g, '\\"');
+      const cmd = `yt-dlp --no-playlist -x --audio-format mp3 -o "${outAudio}" "${safeUrl}"`;
+      await runCmd(cmd);
+      // yt-dlp pode gerar com outro nome; procurar o arquivo gerado - vamos assumir outAudio existe
+      narrationFile = { path: outAudio, filename: path.basename(outAudio) };
+      tempFiles.push(outAudio);
+    }
 
-    const lastFile = mediaFiles[mediaFiles.length - 1].path.replace(/'/g, "'\\''");
-    const finalContent = `${fileContent}\nfile '${lastFile}'`;
+    if (!narrationFile) return res.status(400).send('Envie youtubeUrl ou ficheiro de narração.');
 
-    fs.writeFileSync(fileListPath, finalContent);
+    // 2) Transcrever narração (Whisper)
+    console.log('Transcrevendo áudio em:', narrationFile.path);
+    const transcription = await transcribeWithOpenAI(narrationFile.path);
+    console.log('Transcrição obtida (trecho):', transcription.slice(0, 200));
 
-    await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -r 25 -y "${silentVideoPath}"`);
-    await runFFmpeg(`ffmpeg -i "${silentVideoPath}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest -y "${outputPath}"`);
+    // 3) Reescrever transcrição com OpenAI (r eadability / roteiro)
+    const rewritten = await rewriteTextWithOpenAI(transcription);
+    console.log('Roteiro reescrito (trecho):', rewritten.slice(0, 200));
 
-    res.download(outputPath, path.basename(outputPath), () => {
-      fs.unlinkSync(narrationFile.path);
-      mediaFiles.forEach(f => fs.unlinkSync(f.path));
-      fs.unlinkSync(fileListPath);
-      fs.unlinkSync(silentVideoPath);
-      fs.unlinkSync(outputPath);
+    // 4) Gerar voz sintetizada (opcional)
+    const useEleven = req.body.useEleven === 'true';
+    let finalAudioPath = narrationFile.path;
+    if (useEleven) {
+      const ttsOut = path.join(PROCESS_DIR, `tts_${Date.now()}.mp3`);
+      await generateVoiceWithEleven(rewritten, ttsOut);
+      finalAudioPath = ttsOut;
+      tempFiles.push(ttsOut);
+    }
+
+    // 5) Montar imagens em vídeo silencioso
+    // Se o usuário enviou imagens, usamos. Caso contrário, tentamos gerar frames (não implementado aqui).
+    if (mediaFiles.length === 0) {
+      // fallback: criar a imagem a partir do texto (simples) - aqui cria uma imagem PNG com texto via imagem simples
+      // vamos criar 1 imagem com o título do roteiro (dependência: native canvas not required; cria imagem básica com ffmpeg color + drawtext)
+      const imgPath = path.join(UPLOAD_DIR, `img_${Date.now()}.png`);
+      // cria imagem PNG preta com texto usando ffmpeg drawtext (requer font disponível)
+      const title = (rewritten.split('\n')[0] || 'Video').replace(/"/g, '\\"');
+      const cmdImg = `ffmpeg -y -f lavfi -i color=c=black:s=1920x1080 -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${title}':fontcolor=white:fontsize=60:x=(w-text_w)/2:y=(h-text_h)/2" -frames:v 1 "${imgPath}"`;
+      await runCmd(cmdImg);
+      mediaFiles.push({ path: imgPath });
+      tempFiles.push(imgPath);
+    }
+
+    // criar file list para concat com duration baseado no tempo do áudio
+    const audioDurationRes = await runCmd(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${finalAudioPath}"`);
+    const audioDuration = parseFloat(audioDurationRes.stdout || audioDurationRes.stderr || '0') || 0;
+    const durationPerImage = Math.max(2, audioDuration / Math.max(1, mediaFiles.length)); // mínimo 2s
+    const listPath = path.join(UPLOAD_DIR, `list_${Date.now()}.txt`);
+    const listContent = mediaFiles.map(f => `file '${f.path.replace(/'/g, "'\\''")}'\nduration ${durationPerImage}`).join('\n') + `\nfile '${mediaFiles[mediaFiles.length-1].path.replace(/'/g, "'\\''")}'`;
+    fs.writeFileSync(listPath, listContent);
+    tempFiles.push(listPath);
+
+    // criar silent video a partir das imagens
+    const silentVideo = path.join(PROCESS_DIR, `silent_${Date.now()}.mp4`);
+    const createSilentCmd = `ffmpeg -y -f concat -safe 0 -i "${listPath}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p" -c:v libx264 -r 25 "${silentVideo}"`;
+    await runCmd(createSilentCmd);
+    tempFiles.push(silentVideo);
+
+    // juntar audio final ao silent video
+    const outputVideo = path.join(PROCESS_DIR, `final_${Date.now()}.mp4`);
+    const mergeCmd = `ffmpeg -y -i "${silentVideo}" -i "${finalAudioPath}" -c:v copy -c:a aac -shortest "${outputVideo}"`;
+    await runCmd(mergeCmd);
+    tempFiles.push(outputVideo);
+
+    // responder com link (ou download direto)
+    // aqui enviamos o arquivo para download direto
+    res.download(outputVideo, path.basename(outputVideo), (err) => {
+      // cleanup
+      tempFiles.forEach(p => safeUnlink(p));
+      if (narrationFile && narrationFile.path && !useEleven) safeUnlink(narrationFile.path);
+      if (err) console.error('Erro res.download:', err.message);
     });
-  } catch (e) {
-    res.status(500).send(e.message);
+
+  } catch (err) {
+    console.error('Erro /criar-video-automatico-integrado:', err.message || err);
+    // cleanup partials
+    // try to cleanup created tmp files in UPLOAD_DIR and PROCESS_DIR older than this run (simple)
+    res.status(500).send(`Erro interno: ${err.message || err}`);
   }
 });
 
+// health
+app.get('/', (req, res) => res.send('ok'));
 
-// 6. Iniciar Servidor
-app.listen(PORT, () => {
-  console.log(`Servidor a correr na porta ${PORT}`);
-});
+// global error handlers
+process.on('uncaughtException', e => console.error('uncaughtException', e));
+process.on('unhandledRejection', e => console.error('unhandledRejection', e));
+
+app.listen(PORT, () => console.log(`Server rodando na porta ${PORT}`));
