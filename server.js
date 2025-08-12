@@ -7,6 +7,7 @@ const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
+const { YoutubeTranscript } = require('youtube-transcript'); // <-- ADICIONADO
 
 // 2. Configuração Inicial
 const app = express();
@@ -63,6 +64,29 @@ function getMediaDuration(filePath) {
 
 // 5. Rotas
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
+
+// --- ROTA NOVA PARA EXTRAIR ROTEIRO DO YOUTUBE ---
+app.post('/extrair-roteiro', async (req, res) => {
+  const { url } = req.body;
+
+  if (!url) {
+    return res.status(400).json({ error: 'URL do YouTube não fornecida.' });
+  }
+
+  try {
+    const transcript = await YoutubeTranscript.fetchTranscript(url);
+    if (!transcript || transcript.length === 0) {
+      return res.status(404).json({ error: 'Nenhuma transcrição encontrada para este vídeo.' });
+    }
+    const roteiroCompleto = transcript.map(item => item.text).join(' ');
+    res.json({ roteiro: roteiroCompleto });
+  } catch (error) {
+    console.error("Erro ao buscar transcrição:", error.message);
+    res.status(500).json({ error: 'Falha ao processar o vídeo. Verifique se a URL está correta e se o vídeo possui legendas.' });
+  }
+});
+
+// --- ROTAS DE PROCESSAMENTO DE VÍDEO ---
 
 // Cortar vídeo
 app.post('/cortar-video', upload.single('videos'), async (req, res) => {
@@ -230,4 +254,3 @@ app.post('/criar-video-automatico', upload.fields([
 app.listen(PORT, () => {
   console.log(`Servidor a correr na porta ${PORT}`);
 });
-
