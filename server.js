@@ -5,7 +5,7 @@ const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
-const archiver = require('archiver'); // <-- ADICIONADO: Para criar ficheiros .zip
+const archiver = require('archiver');
 
 // 2. Configuração Inicial
 const app = express();
@@ -65,7 +65,6 @@ function sendZipResponse(res, filesToZip, filesToDelete) {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename=resultado.zip');
 
-    // Limpa os ficheiros temporários quando a resposta for fechada
     res.on('close', () => {
         console.log('Limpando ficheiros temporários...');
         filesToDelete.forEach(file => {
@@ -118,7 +117,6 @@ app.post('/cortar-video', upload.array('videos'), async (req, res) => {
         sendZipResponse(res, processedFiles, filesToDelete);
 
     } catch (e) {
-        // Limpa ficheiros em caso de erro
         files.forEach(f => { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); });
         res.status(500).send(e.message);
     }
@@ -293,6 +291,39 @@ app.post('/criar-video-automatico', upload.fields([
     filesToDelete.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
     res.status(500).send(e.message);
   }
+});
+
+// Rota para Extrair Áudio de Vídeo
+app.post('/extrair-audio', upload.array('media'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) {
+        return res.status(400).send('Nenhum ficheiro enviado.');
+    }
+
+    try {
+        const processedFiles = [];
+        const filesToDelete = [];
+
+        for (const file of files) {
+            const inputPath = file.path;
+            const originalName = path.parse(file.filename).name;
+            const outputFilename = `audio-${originalName}.mp3`;
+            const outputPath = path.join(processedDir, outputFilename);
+
+            // Comando FFmpeg para extrair o áudio (-vn ignora o vídeo, -acodec copy copia o áudio sem re-codificar se possível)
+            // Usar -acodec mp3 para garantir a compatibilidade
+            await runFFmpeg(`ffmpeg -i "${inputPath}" -vn -acodec mp3 "${outputPath}"`);
+            
+            processedFiles.push({ path: outputPath, name: outputFilename });
+            filesToDelete.push(inputPath, outputPath);
+        }
+
+        sendZipResponse(res, processedFiles, filesToDelete);
+
+    } catch (e) {
+        files.forEach(f => { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); });
+        res.status(500).send(e.message);
+    }
 });
 
 
