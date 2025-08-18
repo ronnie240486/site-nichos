@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 const archiver = require('archiver');
-const { SpeechClient } = require('@google-cloud/speech'); // <-- Módulo necessário
+const { SpeechClient } = require('@google-cloud/speech');
 
 // 2. Configuração Inicial
 const app = express();
@@ -29,7 +29,14 @@ const storage = multer.diskStorage({
         cb(null, `${Date.now()}-${safeOriginalName}`);
     }
 });
-const upload = multer({ storage: storage });
+
+// --- CORREÇÃO APLICADA AQUI ---
+const upload = multer({
+    storage: storage,
+    limits: {
+        fieldSize: 50 * 1024 * 1024 // Aumenta o limite para 50 MB
+    }
+});
 
 // 4. Funções Auxiliares
 function runFFmpeg(command, options = {}) {
@@ -83,7 +90,6 @@ function sendZipResponse(res, filesToZip, filesToDelete) {
 // 5. Rotas
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 
-// ... (Suas rotas existentes como /cortar-video, /unir-videos, etc. continuam aqui) ...
 app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
@@ -110,6 +116,7 @@ app.post('/cortar-video', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
+
 app.post('/unir-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
@@ -127,6 +134,7 @@ app.post('/unir-videos', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
+
 app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
@@ -154,6 +162,7 @@ app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
+
 app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
@@ -172,6 +181,7 @@ app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
+
 app.post('/remover-audio', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
@@ -199,6 +209,7 @@ app.post('/remover-audio', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
+
 app.post('/criar-video-automatico', upload.fields([
     { name: 'narration', maxCount: 1 },
     { name: 'media', maxCount: 50 }
@@ -252,7 +263,6 @@ app.post('/extrair-audio', upload.single('video'), async (req, res) => {
     }
 });
 
-// ROTA ATUALIZADA: Transcrever Áudio com Google Cloud e Idioma Dinâmico
 app.post('/transcrever-audio', upload.fields([
     { name: 'audio', maxCount: 1 },
     { name: 'googleCreds', maxCount: 1 },
