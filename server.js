@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 const archiver = require('archiver');
-const { SpeechClient } = require('@google-cloud/speech'); // <-- ADICIONADO
+const { SpeechClient } = require('@google-cloud/speech'); // <-- Módulo necessário
 
 // 2. Configuração Inicial
 const app = express();
@@ -83,7 +83,7 @@ function sendZipResponse(res, filesToZip, filesToDelete) {
 // 5. Rotas
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 
-// ... (todas as suas outras rotas como /cortar-video, /unir-videos, etc. permanecem aqui) ...
+// ... (Suas rotas existentes como /cortar-video, /unir-videos, etc. continuam aqui) ...
 app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
@@ -252,13 +252,15 @@ app.post('/extrair-audio', upload.single('video'), async (req, res) => {
     }
 });
 
-// ROTA ATUALIZADA: Transcrever Áudio com Google Cloud
+// ROTA ATUALIZADA: Transcrever Áudio com Google Cloud e Idioma Dinâmico
 app.post('/transcrever-audio', upload.fields([
     { name: 'audio', maxCount: 1 },
-    { name: 'googleCreds', maxCount: 1 }
+    { name: 'googleCreds', maxCount: 1 },
+    { name: 'languageCode', maxCount: 1 }
 ]), async (req, res) => {
     const audioFile = req.files.audio?.[0];
     const googleCredsString = req.body.googleCreds;
+    const languageCode = req.body.languageCode || 'pt-BR';
 
     if (!audioFile) {
         return res.status(400).send('Nenhum ficheiro de áudio enviado.');
@@ -271,30 +273,26 @@ app.post('/transcrever-audio', upload.fields([
     let tempCredsPath;
 
     try {
-        // 1. Prepara as credenciais
         const creds = JSON.parse(googleCredsString);
         tempCredsPath = path.join(__dirname, 'uploads', `creds-${Date.now()}.json`);
         fs.writeFileSync(tempCredsPath, JSON.stringify(creds));
         filesToDelete.push(tempCredsPath);
 
-        // 2. Inicializa o cliente do Google Speech
         const speechClient = new SpeechClient({
             keyFilename: tempCredsPath
         });
 
-        // 3. Configura a requisição de transcrição
         const audioBytes = fs.readFileSync(audioFile.path).toString('base64');
         const audio = { content: audioBytes };
         const config = {
             encoding: 'WAV',
             sampleRateHertz: 16000,
-            languageCode: 'pt-BR',
+            languageCode: languageCode,
             model: 'default',
         };
         const request = { audio: audio, config: config };
 
-        // 4. Chama a API do Google
-        console.log('Enviando áudio para a API do Google Speech-to-Text...');
+        console.log(`Enviando áudio para a API do Google com o idioma: ${languageCode}...`);
         const [response] = await speechClient.recognize(request);
         const transcription = response.results
             .map(result => result.alternatives[0].transcript)
@@ -302,14 +300,12 @@ app.post('/transcrever-audio', upload.fields([
 
         console.log(`Transcrição recebida: ${transcription}`);
         
-        // 5. Envia o roteiro de volta para o frontend
         res.json({ script: transcription || "Não foi possível transcrever o áudio." });
 
     } catch (e) {
         console.error("Erro na transcrição:", e);
         res.status(500).send(e.message);
     } finally {
-        // 6. Limpa os ficheiros temporários
         filesToDelete.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
     }
 });
