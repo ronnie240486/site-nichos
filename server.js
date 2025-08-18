@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 const archiver = require('archiver');
+const { SpeechClient } = require('@google-cloud/speech'); // <-- ADICIONADO
 
 // 2. Configuração Inicial
 const app = express();
@@ -19,7 +20,6 @@ if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 // 3. Middlewares
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-// A pasta 'processed' agora serve arquivos estáticos para que os frames possam ser acessados por URL
 app.use('/downloads', express.static(processedDir));
 
 const storage = multer.diskStorage({
@@ -80,24 +80,19 @@ function sendZipResponse(res, filesToZip, filesToDelete) {
     archive.finalize();
 }
 
-// 5. Rotas (Ferramentas Genéricas)
+// 5. Rotas
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 
-// Cortar vídeo
+// ... (todas as suas outras rotas como /cortar-video, /unir-videos, etc. permanecem aqui) ...
 app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
-    
     const { startTime, endTime } = req.body;
-    
-    // SEGURANÇA: Validar o formato do tempo para prevenir Command Injection.
-    // Aceita segundos (ex: "30.5") ou formato HH:MM:SS (ex: "00:01:30.5").
     const timeRegex = /^(?:[0-9]+(?:\.[0-9]*)?|[0-5]?\d:[0-5]?\d:[0-5]?\d(?:\.\d+)?)$/;
     if (!startTime || !endTime || !timeRegex.test(startTime) || !timeRegex.test(endTime)) {
-        files.forEach(f => fs.unlinkSync(f.path)); // Limpa os uploads
+        files.forEach(f => fs.unlinkSync(f.path));
         return res.status(400).send('Formato de tempo inválido. Use HH:MM:SS ou segundos.');
     }
-
     try {
         const processedFiles = [];
         const filesToDelete = [];
@@ -115,8 +110,6 @@ app.post('/cortar-video', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
-
-// Unir vídeos (Nenhuma mudança necessária aqui, já era seguro)
 app.post('/unir-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
@@ -134,22 +127,16 @@ app.post('/unir-videos', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
-
-// Comprimir vídeo
 app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
-
-    // SEGURANÇA: Validar a entrada 'quality' para garantir que apenas valores do mapa sejam usados.
     const quality = req.body.quality;
     const crfMap = { alta: '18', media: '23', baixa: '28' };
     const crf = crfMap[quality];
-
     if (!crf) {
-        files.forEach(f => fs.unlinkSync(f.path)); // Limpa os uploads
+        files.forEach(f => fs.unlinkSync(f.path));
         return res.status(400).send('Qualidade inválida. Use "alta", "media" ou "baixa".');
     }
-    
     try {
         const processedFiles = [];
         const filesToDelete = [];
@@ -167,10 +154,7 @@ app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
-
-// Embaralhar vídeos (Nenhuma mudança necessária aqui, já era seguro)
 app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
-    // ...código original...
     const files = req.files || [];
     if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
     const shuffled = files.sort(() => Math.random() - 0.5);
@@ -188,10 +172,7 @@ app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
-
-// Remover áudio/metadados (Nenhuma mudança necessária aqui, já era seguro)
 app.post('/remover-audio', upload.array('videos'), async (req, res) => {
-    // ...código original...
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
     if (req.body.removeAudio !== 'true' && req.body.removeMetadata !== 'true') {
@@ -218,14 +199,10 @@ app.post('/remover-audio', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
-
-
-// Criar vídeo automático (Nenhuma mudança necessária aqui, já era seguro)
 app.post('/criar-video-automatico', upload.fields([
     { name: 'narration', maxCount: 1 },
     { name: 'media', maxCount: 50 }
 ]), async (req, res) => {
-    // ...código original...
     const narrationFile = req.files.narration?.[0];
     const mediaFiles = req.files.media || [];
     if (!narrationFile || mediaFiles.length === 0) {
@@ -252,12 +229,9 @@ app.post('/criar-video-automatico', upload.fields([
     }
 });
 
+// --- ROTAS DO IA TURBO ---
 
-// --- NOVAS ROTAS PARA O IA TURBO ---
-
-// Rota para Extrair Áudio (Nenhuma mudança necessária aqui, já era seguro)
 app.post('/extrair-audio', upload.single('video'), async (req, res) => {
-    // ...código original...
     const file = req.file;
     if (!file) {
         return res.status(400).send('Nenhum ficheiro de vídeo enviado.');
@@ -278,18 +252,90 @@ app.post('/extrair-audio', upload.single('video'), async (req, res) => {
     }
 });
 
-// Rota para Transcrever Áudio (Nenhuma mudança necessária aqui)
-app.post('/transcrever-audio', upload.single('audio'), async (req, res) => {
-    // ...código original...
-    const file = req.file;
-    if (!file) {
+// ROTA ATUALIZADA: Transcrever Áudio com Google Cloud
+app.post('/transcrever-audio', upload.fields([
+    { name: 'audio', maxCount: 1 },
+    { name: 'googleCreds', maxCount: 1 }
+]), async (req, res) => {
+    const audioFile = req.files.audio?.[0];
+    const googleCredsString = req.body.googleCreds;
+
+    if (!audioFile) {
         return res.status(400).send('Nenhum ficheiro de áudio enviado.');
     }
-    const filesToDelete = [file.path];
+    if (!googleCredsString) {
+        return res.status(400).send('Credenciais do Google Cloud não enviadas.');
+    }
+
+    const filesToDelete = [audioFile.path];
+    let tempCredsPath;
+
     try {
-        console.log(`Simulando transcrição para o ficheiro: ${file.path}`);
-        const mockScript = "Este é um roteiro simulado. A integração com uma API de transcrição real é necessária aqui. O vídeo parece discutir tecnologia e inovação, com foco em inteligência artificial.";
-        res.json({ script: mockScript });
+        // 1. Prepara as credenciais
+        const creds = JSON.parse(googleCredsString);
+        tempCredsPath = path.join(__dirname, 'uploads', `creds-${Date.now()}.json`);
+        fs.writeFileSync(tempCredsPath, JSON.stringify(creds));
+        filesToDelete.push(tempCredsPath);
+
+        // 2. Inicializa o cliente do Google Speech
+        const speechClient = new SpeechClient({
+            keyFilename: tempCredsPath
+        });
+
+        // 3. Configura a requisição de transcrição
+        const audioBytes = fs.readFileSync(audioFile.path).toString('base64');
+        const audio = { content: audioBytes };
+        const config = {
+            encoding: 'WAV',
+            sampleRateHertz: 16000,
+            languageCode: 'pt-BR',
+            model: 'default',
+        };
+        const request = { audio: audio, config: config };
+
+        // 4. Chama a API do Google
+        console.log('Enviando áudio para a API do Google Speech-to-Text...');
+        const [response] = await speechClient.recognize(request);
+        const transcription = response.results
+            .map(result => result.alternatives[0].transcript)
+            .join('\n');
+
+        console.log(`Transcrição recebida: ${transcription}`);
+        
+        // 5. Envia o roteiro de volta para o frontend
+        res.json({ script: transcription || "Não foi possível transcrever o áudio." });
+
+    } catch (e) {
+        console.error("Erro na transcrição:", e);
+        res.status(500).send(e.message);
+    } finally {
+        // 6. Limpa os ficheiros temporários
+        filesToDelete.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
+    }
+});
+
+app.post('/extrair-frames', upload.single('video'), async (req, res) => {
+    const file = req.file;
+    if (!file) {
+        return res.status(400).send('Nenhum ficheiro de vídeo enviado.');
+    }
+    const inputPath = file.path;
+    const uniquePrefix = `frame-${Date.now()}`;
+    const outputPattern = path.join(processedDir, `${uniquePrefix}-%03d.png`);
+    let filesToDelete = [inputPath];
+    try {
+        const duration = await getMediaDuration(inputPath);
+        const frameCount = Math.min(Math.floor(duration / 5), 8) || 1;
+        const fps = frameCount / duration;
+        await runFFmpeg(`ffmpeg -i "${inputPath}" -vf fps=${fps} -vsync vfr "${outputPattern}"`);
+        const frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
+        const base64Frames = frameFiles.map(frameFile => {
+            const framePath = path.join(processedDir, frameFile);
+            filesToDelete.push(framePath);
+            const bitmap = fs.readFileSync(framePath);
+            return `data:image/png;base64,${Buffer.from(bitmap).toString('base64')}`;
+        });
+        res.json({ frames: base64Frames });
     } catch (e) {
         res.status(500).send(e.message);
     } finally {
@@ -297,52 +343,7 @@ app.post('/transcrever-audio', upload.single('audio'), async (req, res) => {
     }
 });
 
-// Rota para Extrair Frames (IA Turbo)
-app.post('/extrair-frames', upload.single('video'), async (req, res) => {
-    const file = req.file;
-    if (!file) {
-        return res.status(400).send('Nenhum ficheiro de vídeo enviado.');
-    }
-    const inputPath = file.path;
-    // Usar um prefixo único para esta requisição
-    const uniquePrefix = `frame-${Date.now()}`;
-    const outputPattern = path.join(processedDir, `${uniquePrefix}-%03d.png`);
-    let filesToDelete = [inputPath];
-    
-    try {
-        const duration = await getMediaDuration(inputPath);
-        const frameCount = Math.min(Math.floor(duration / 5), 8) || 1;
-        const fps = frameCount / duration;
-
-        await runFFmpeg(`ffmpeg -i "${inputPath}" -vf fps=${fps} -vsync vfr "${outputPattern}"`);
-
-        const frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
-        
-        // MELHORIA: Enviar URLs em vez de Base64 para economizar memória.
-        const frameUrls = frameFiles.map(frameFile => {
-            // Constrói a URL completa para o ficheiro
-            return `${req.protocol}://${req.get('host')}/downloads/${frameFile}`;
-        });
-
-        res.json({ frames: frameUrls });
-        
-        // NOTA IMPORTANTE: Os ficheiros de frames não são apagados imediatamente
-        // porque o cliente precisa de tempo para os requisitar via URL.
-        // Você precisará de uma estratégia de limpeza posterior (ex: um trabalho agendado
-        // que apaga ficheiros mais antigos que X horas na pasta 'processed').
-        // Por simplicidade, a limpeza imediata foi removida daqui.
-
-    } catch (e) {
-        res.status(500).send(e.message);
-        // Limpa o upload inicial em caso de erro
-        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-    }
-});
-
-
-// Rota para Mixar o Vídeo Final (Nenhuma mudança necessária aqui, já era seguro)
 app.post('/mixar-video-turbo', upload.single('narration'), async (req, res) => {
-    // ...código original...
     const narrationFile = req.file;
     const { images, script } = req.body;
     if (!narrationFile || !images || !script) {
@@ -381,7 +382,6 @@ app.post('/mixar-video-turbo', upload.single('narration'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
-
 
 // 6. Iniciar Servidor
 app.listen(PORT, () => {
