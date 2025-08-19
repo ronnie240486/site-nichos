@@ -30,11 +30,10 @@ const storage = multer.diskStorage({
     }
 });
 
-// --- CORREÇÃO APLICADA AQUI ---
 const upload = multer({
     storage: storage,
     limits: {
-        fieldSize: 50 * 1024 * 1024 // Aumenta o limite para 50 MB
+        fieldSize: 50 * 1024 * 1024
     }
 });
 
@@ -89,6 +88,8 @@ function sendZipResponse(res, filesToZip, filesToDelete) {
 
 // 5. Rotas
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
+app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
+
 
 app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
@@ -349,45 +350,68 @@ app.post('/extrair-frames', upload.single('video'), async (req, res) => {
     }
 });
 
+// --- ROTA CORRIGIDA ---
 app.post('/mixar-video-turbo', upload.single('narration'), async (req, res) => {
     const narrationFile = req.file;
-    const { images, script } = req.body;
+    const { images, script, imageDuration, transition } = req.body;
+
     if (!narrationFile || !images || !script) {
+        if (narrationFile) fs.unlinkSync(narrationFile.path);
         return res.status(400).send('Dados insuficientes para mixar o vídeo.');
     }
+
     const imageArray = JSON.parse(images);
     let tempFiles = [narrationFile.path];
+
     try {
         const imagePaths = imageArray.map((dataUrl, i) => {
-            const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
+            const base64Data = dataUrl.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
             const imagePath = path.join(uploadDir, `turbo-img-${Date.now()}-${i}.png`);
             fs.writeFileSync(imagePath, base64Data, 'base64');
             tempFiles.push(imagePath);
             return imagePath;
         });
-        const audioDuration = await getMediaDuration(narrationFile.path);
-        const durationPerImage = audioDuration / imagePaths.length;
+
+        let durationPerImage;
+        const parsedImageDuration = parseFloat(imageDuration);
+
+        if (parsedImageDuration && parsedImageDuration > 0) {
+            durationPerImage = parsedImageDuration;
+            console.log(`Usando duração por imagem fornecida: ${durationPerImage}s`);
+        } else {
+            const audioDuration = await getMediaDuration(narrationFile.path);
+            durationPerImage = audioDuration / imagePaths.length;
+            console.log(`Calculando duração sincronizada: ${durationPerImage.toFixed(2)}s`);
+        }
+
         const fileListPath = path.join(uploadDir, `list-turbo-${Date.now()}.txt`);
         const fileContent = imagePaths.map(p => `file '${p.replace(/'/g, "'\\''")}'\nduration ${durationPerImage}`).join('\n');
         fs.writeFileSync(fileListPath, fileContent + `\nfile '${imagePaths[imagePaths.length - 1].replace(/'/g, "'\\''")}'`);
         tempFiles.push(fileListPath);
+        
         const silentVideoPath = path.join(processedDir, `silent-turbo-${Date.now()}.mp4`);
         tempFiles.push(silentVideoPath);
+        
         const kenBurnsEffect = `zoompan=z='min(zoom+0.0015,1.5)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080`;
         await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1,${kenBurnsEffect},format=yuv420p" -c:v libx264 -r 25 -y "${silentVideoPath}"`);
+        
         const outputFilename = `video-final-turbo-${Date.now()}.mp4`;
         const outputPath = path.join(processedDir, outputFilename);
         tempFiles.push(outputPath);
+        
         await runFFmpeg(`ffmpeg -i "${silentVideoPath}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest -y "${outputPath}"`);
+        
         res.sendFile(outputPath, (err) => {
             if (err) console.error('Erro ao enviar vídeo final:', err);
             tempFiles.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
         });
+
     } catch (e) {
         tempFiles.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
         res.status(500).send(e.message);
     }
 });
+
 
 // 6. Iniciar Servidor
 app.listen(PORT, () => {
