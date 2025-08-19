@@ -385,8 +385,13 @@ app.post('/mixar-video-turbo', upload.single('narration'), async (req, res) => {
         }
 
         const fileListPath = path.join(uploadDir, `list-turbo-${Date.now()}.txt`);
+        
+        // --- CORREÇÃO APLICADA AQUI ---
+        // A linha que adicionava a última imagem foi removida, pois causava o erro.
         const fileContent = imagePaths.map(p => `file '${p.replace(/'/g, "'\\''")}'\nduration ${durationPerImage}`).join('\n');
-        fs.writeFileSync(fileListPath, fileContent + `\nfile '${imagePaths[imagePaths.length - 1].replace(/'/g, "'\\''")}'`);
+        fs.writeFileSync(fileListPath, fileContent);
+        // --- FIM DA CORREÇÃO ---
+
         tempFiles.push(fileListPath);
         
         const silentVideoPath = path.join(processedDir, `silent-turbo-${Date.now()}.mp4`);
