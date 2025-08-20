@@ -74,21 +74,21 @@ function sendZipResponse(res, filesToZip, filesToDelete) {
     archive.finalize();
 }
 
-// 5. Rotas básicas
+// 5. Rotas Básicas
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
 
 // 6. Rotas de processamento
 
-// ➤ Cortar vídeo
+// 6.1 Cortar vídeos
 app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
-    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+    if (!files.length) return res.status(400).send('Nenhum ficheiro enviado.');
     const { startTime, endTime } = req.body;
     const timeRegex = /^(?:[0-9]+(?:\.[0-9]*)?|[0-5]?\d:[0-5]?\d:[0-5]?\d(?:\.\d+)?)$/;
     if (!startTime || !endTime || !timeRegex.test(startTime) || !timeRegex.test(endTime)) {
         files.forEach(f => fs.unlinkSync(f.path));
-        return res.status(400).send('Formato de tempo inválido. Use HH:MM:SS ou segundos.');
+        return res.status(400).send('Formato de tempo inválido.');
     }
     try {
         const processedFiles = [];
@@ -108,7 +108,7 @@ app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     }
 });
 
-// ➤ Unir vídeos
+// 6.2 Unir vídeos
 app.post('/unir-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
@@ -127,16 +127,16 @@ app.post('/unir-videos', upload.array('videos'), async (req, res) => {
     }
 });
 
-// ➤ Comprimir vídeos
+// 6.3 Comprimir vídeos
 app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
-    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+    if (!files.length) return res.status(400).send('Nenhum ficheiro enviado.');
     const quality = req.body.quality;
     const crfMap = { alta: '18', media: '23', baixa: '28' };
     const crf = crfMap[quality];
     if (!crf) {
         files.forEach(f => fs.unlinkSync(f.path));
-        return res.status(400).send('Qualidade inválida. Use "alta", "media" ou "baixa".');
+        return res.status(400).send('Qualidade inválida.');
     }
     try {
         const processedFiles = [];
@@ -156,30 +156,10 @@ app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
     }
 });
 
-// ➤ Embaralhar vídeos
-app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
-    const files = req.files || [];
-    if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
-    const shuffled = files.sort(() => Math.random() - 0.5);
-    const fileListPath = path.join(uploadDir, `list-shuf-${Date.now()}.txt`);
-    const outputFilename = `embaralhado-${Date.now()}.mp4`;
-    const outputPath = path.join(processedDir, outputFilename);
-    const fileContent = shuffled.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
-    fs.writeFileSync(fileListPath, fileContent);
-    const filesToDelete = [...files.map(f => f.path), fileListPath, outputPath];
-    try {
-        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy "${outputPath}"`);
-        sendZipResponse(res, [{ path: outputPath, name: outputFilename }], filesToDelete);
-    } catch (e) {
-        filesToDelete.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
-        res.status(500).send(e.message);
-    }
-});
-
-// ➤ Remover áudio
+// 6.4 Remover áudio ou metadata
 app.post('/remover-audio', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
-    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+    if (!files.length) return res.status(400).send('Nenhum ficheiro enviado.');
     if (req.body.removeAudio !== 'true' && req.body.removeMetadata !== 'true') {
         return res.status(400).send('Nenhuma opção selecionada.');
     }
@@ -188,13 +168,13 @@ app.post('/remover-audio', upload.array('videos'), async (req, res) => {
         const filesToDelete = [];
         for (const file of files) {
             const inputPath = file.path;
-            const outputFilename = `semAudio-${file.filename}`;
+            const outputFilename = `processado-${file.filename}`;
             const outputPath = path.join(processedDir, outputFilename);
-            let cmd = `ffmpeg -i "${inputPath}" -c copy`;
-            if (req.body.removeAudio === 'true') cmd += ' -an';
-            if (req.body.removeMetadata === 'true') cmd += ' -map_metadata -1';
-            cmd += ` "${outputPath}"`;
-            await runFFmpeg(cmd);
+            let flags = '-c:v copy';
+            if (req.body.removeAudio === 'true') flags += ' -an';
+            else flags += ' -c:a copy';
+            if (req.body.removeMetadata === 'true') flags += ' -map_metadata -1';
+            await runFFmpeg(`ffmpeg -i "${inputPath}" ${flags} "${outputPath}"`);
             processedFiles.push({ path: outputPath, name: outputFilename });
             filesToDelete.push(inputPath, outputPath);
         }
@@ -205,85 +185,46 @@ app.post('/remover-audio', upload.array('videos'), async (req, res) => {
     }
 });
 
-// ➤ IA Turbo: Mixar vídeo com narração e imagens
-app.post('/mixar-video-turbo', upload.single('narration'), async (req, res) => {
-    const narrationFile = req.file;
-    const { images, script, imageDuration } = req.body;
-
-    if (!narrationFile || !images || !script) {
-        if (narrationFile) fs.unlinkSync(narrationFile.path);
-        return res.status(400).send('Dados insuficientes para mixar o vídeo.');
-    }
-
-    const imageArray = JSON.parse(images);
-    let tempFiles = [narrationFile.path];
-
+// 6.5 IA Turbo - mixar vídeo avançado
+app.post('/mixar-video-turbo', upload.fields([
+    { name: 'narration', maxCount: 1 },
+    { name: 'images', maxCount: 50 },
+    { name: 'script', maxCount: 1 }
+]), async (req, res) => {
     try {
-        // 1️⃣ Salva imagens temporárias
-        const imagePaths = imageArray.map((dataUrl, i) => {
-            const base64Data = dataUrl.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
-            const imagePath = path.join(uploadDir, `turbo-img-${Date.now()}-${i}.png`);
-            fs.writeFileSync(imagePath, base64Data, 'base64');
-            tempFiles.push(imagePath);
-            return imagePath;
+        const narrationFile = req.files['narration'][0].path;
+        const scriptText = req.body.script;
+        const imagesArray = JSON.parse(req.body.images);
+        const imageDuration = parseFloat(req.body.imageDuration) || 5;
+
+        // Criar lista de imagens
+        const listFilePath = path.join(uploadDir, `list-turbo-${Date.now()}.txt`);
+        let lines = [];
+        imagesArray.forEach(img => {
+            lines.push(`file '${img}'`);
+            lines.push(`duration ${imageDuration}`);
         });
+        fs.writeFileSync(listFilePath, lines.join('\n'));
 
-        // 2️⃣ Calcula duração por imagem
-        let durationPerImage;
-        const parsedImageDuration = parseFloat(imageDuration);
-        if (parsedImageDuration && parsedImageDuration > 0) {
-            durationPerImage = parsedImageDuration;
-        } else {
-            const audioDuration = await getMediaDuration(narrationFile.path);
-            durationPerImage = audioDuration / imagePaths.length;
-        }
+        // Frames
+        const frameRate = 25;
+        const totalFrames = Math.ceil(imageDuration * frameRate);
 
-        // 3️⃣ Cria arquivo de lista para FFmpeg
-        const fileListPath = path.join(uploadDir, `list-turbo-${Date.now()}.txt`);
-        let fileContent = "";
-        imagePaths.forEach((p, i) => {
-            const safePath = p.replace(/'/g, "'\\''");
-            if (i < imagePaths.length - 1) {
-                fileContent += `file '${safePath}'\nduration ${durationPerImage}\n`;
-            } else {
-                fileContent += `file '${safePath}'\n`;
-            }
-        });
-        fs.writeFileSync(fileListPath, fileContent);
-        tempFiles.push(fileListPath);
+        // Compor vídeo final
+        const outputName = `turbo-${Date.now()}.mp4`;
+        const outputPath = path.join(processedDir, outputName);
+        const ffmpegCmd = `
+ffmpeg -f concat -safe 0 -i "${listFilePath}" \
+-i "${narrationFile}" \
+-vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1,zoompan=z='min(zoom+0.0015,1.5)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080,format=yuv420p" \
+-c:v libx264 -r ${frameRate} -c:a aac -shortest "${outputPath}" -y
+`;
+        await runFFmpeg(ffmpegCmd.trim());
 
-        // 4️⃣ Gera vídeo silencioso com efeito Ken Burns
-        const silentVideoPath = path.join(processedDir, `silent-turbo-${Date.now()}.mp4`);
-        tempFiles.push(silentVideoPath);
-
-        const fps = 25;
-        const dValue = Math.max(1, Math.round(durationPerImage * fps));
-        const kenBurnsEffect = `zoompan=z='min(zoom+0.0015,1.5)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080`;
-
-        await runFFmpeg(
-            `ffmpeg -f concat -safe 0 -i "${fileListPath}" ` +
-            `-vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1,${kenBurnsEffect},format=yuv420p" ` +
-            `-c:v libx264 -r ${fps} -y "${silentVideoPath}"`
-        );
-
-        // 5️⃣ Mixar narração sobre o vídeo
-        const outputFilename = `video-final-turbo-${Date.now()}.mp4`;
-        const outputPath = path.join(processedDir, outputFilename);
-        tempFiles.push(outputPath);
-
-        await runFFmpeg(
-            `ffmpeg -i "${silentVideoPath}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest -y "${outputPath}"`
-        );
-
-        // 6️⃣ Envia arquivo final e limpa temporários
-        res.sendFile(outputPath, (err) => {
-            if (err) console.error('Erro ao enviar vídeo final:', err);
-            tempFiles.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
-        });
-
-    } catch (e) {
-        tempFiles.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
-        res.status(500).send(e.message);
+        res.download(outputPath);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send(err.message);
     }
 });
 
