@@ -18,13 +18,7 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
 // 3. Middlewares
-const allowedOrigin = "https://3gr0qcjith2lshzd81al6pzeg6y8sjyql88u7aykfz3p0wd6ry-h794075209.scf.usercontent.goog"; // frontend
-app.use(cors({
-    origin: allowedOrigin,       // permite apenas esse domínio
-    methods: ["GET", "POST"],    // métodos permitidos
-    allowedHeaders: ["Content-Type", "Authorization"] // cabeçalhos permitidos
-}));
-
+app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use('/downloads', express.static(processedDir));
 
@@ -32,10 +26,10 @@ const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir),
     filename: (req, file, cb) => {
         const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-        cb(null, `${Date.now()}-${safeOriginalName}`);
+        const uniqueName = `${Date.now()}-${Math.random().toString(36).substr(2, 6)}-${safeOriginalName}`;
+        cb(null, uniqueName);
     }
 });
-
 
 const upload = multer({
     storage: storage,
@@ -85,7 +79,10 @@ function sendZipResponse(res, filesToZip, filesToDelete) {
             }
         });
     });
-    archive.on('error', (err) => { throw err; });
+    archive.on('error', (err) => {
+        console.error('Erro ao criar ZIP:', err);
+        res.status(500).send('Falha ao gerar arquivo ZIP.');
+    });
     archive.pipe(res);
     filesToZip.forEach(file => {
         archive.file(file.path, { name: file.name });
@@ -97,7 +94,7 @@ function sendZipResponse(res, filesToZip, filesToDelete) {
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
 
-
+// --- Corte de Vídeo ---
 app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
@@ -125,6 +122,7 @@ app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     }
 });
 
+// --- Unir Vídeos ---
 app.post('/unir-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
@@ -143,6 +141,7 @@ app.post('/unir-videos', upload.array('videos'), async (req, res) => {
     }
 });
 
+// --- Comprimir Vídeos ---
 app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
@@ -171,6 +170,7 @@ app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
     }
 });
 
+// --- Embaralhar Vídeos ---
 app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
@@ -190,6 +190,7 @@ app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
     }
 });
 
+// --- Remover Áudio / Metadata ---
 app.post('/remover-audio', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
@@ -218,6 +219,7 @@ app.post('/remover-audio', upload.array('videos'), async (req, res) => {
     }
 });
 
+// --- Criar Vídeo Automático ---
 app.post('/criar-video-automatico', upload.fields([
     { name: 'narration', maxCount: 1 },
     { name: 'media', maxCount: 50 }
@@ -248,8 +250,7 @@ app.post('/criar-video-automatico', upload.fields([
     }
 });
 
-// --- ROTAS DO IA TURBO ---
-
+// --- Extração de Áudio ---
 app.post('/extrair-audio', upload.single('video'), async (req, res) => {
     const file = req.file;
     if (!file) {
@@ -271,6 +272,7 @@ app.post('/extrair-audio', upload.single('video'), async (req, res) => {
     }
 });
 
+// --- Transcrever Áudio ---
 app.post('/transcrever-audio', upload.fields([
     { name: 'audio', maxCount: 1 },
     { name: 'googleCreds', maxCount: 1 },
@@ -303,7 +305,7 @@ app.post('/transcrever-audio', upload.fields([
         const audioBytes = fs.readFileSync(audioFile.path).toString('base64');
         const audio = { content: audioBytes };
         const config = {
-            encoding: 'WAV',
+            encoding: 'LINEAR16', // corrigido
             sampleRateHertz: 16000,
             languageCode: languageCode,
             model: 'default',
@@ -328,6 +330,7 @@ app.post('/transcrever-audio', upload.fields([
     }
 });
 
+// --- Extração de Frames ---
 app.post('/extrair-frames', upload.single('video'), async (req, res) => {
     const file = req.file;
     if (!file) {
@@ -357,93 +360,4 @@ app.post('/extrair-frames', upload.single('video'), async (req, res) => {
     }
 });
 
-// --- ROTA FINAL E CORRIGIDA ---
-app.post('/mixar-video-turbo', upload.single('narration'), async (req, res) => {
-    const narrationFile = req.file;
-    const { images, script, imageDuration, transition } = req.body;
-
-    if (!narrationFile || !images || !script) {
-        if (narrationFile) fs.unlinkSync(narrationFile.path);
-        return res.status(400).send('Dados insuficientes para mixar o vídeo.');
-    }
-
-    const imageArray = JSON.parse(images);
-    let tempFiles = [narrationFile.path];
-
-    try {
-        const imagePaths = imageArray.map((dataUrl, i) => {
-            const base64Data = dataUrl.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
-            const imagePath = path.join(uploadDir, `turbo-img-${Date.now()}-${i}.png`);
-            fs.writeFileSync(imagePath, base64Data, 'base64');
-            tempFiles.push(imagePath);
-            return imagePath;
-        });
-
-        let durationPerImage;
-        const parsedImageDuration = parseFloat(imageDuration);
-
-        if (parsedImageDuration && parsedImageDuration > 0) {
-            durationPerImage = parsedImageDuration;
-            console.log(`Usando duração por imagem fornecida: ${durationPerImage}s`);
-        } else {
-            const audioDuration = await getMediaDuration(narrationFile.path);
-            durationPerImage = audioDuration / imagePaths.length;
-            console.log(`Calculando duração sincronizada: ${durationPerImage.toFixed(2)}s`);
-        }
-
-        const fileListPath = path.join(uploadDir, `list-turbo-${Date.now()}.txt`);
-        
-        // --- SUGESTÃO 1 APLICADA ---
-        // Cria a lista de ficheiros sem 'duration' na última linha
-        let fileContent = "";
-        imagePaths.forEach((p, i) => {
-            const safePath = p.replace(/'/g, "'\\''");
-            if (i < imagePaths.length - 1) {
-                fileContent += `file '${safePath}'\nduration ${durationPerImage}\n`;
-            } else {
-                fileContent += `file '${safePath}'\n`;
-            }
-        });
-        fs.writeFileSync(fileListPath, fileContent);
-        tempFiles.push(fileListPath);
-        
-        const silentVideoPath = path.join(processedDir, `silent-turbo-${Date.now()}.mp4`);
-        tempFiles.push(silentVideoPath);
-        
-        // --- SUGESTÃO 2 APLICADA ---
-        const fps = 25;
-        // Garante que a duração do efeito é de, no mínimo, 1 frame
-        const dValue = Math.max(1, Math.round(durationPerImage * fps));
-        const kenBurnsEffect = `zoompan=z='min(zoom+0.0015,1.5)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080`;
-        
-        await runFFmpeg(
-            `ffmpeg -f concat -safe 0 -i "${fileListPath}" ` +
-            `-vf "scale=1920:1080:force_original_aspect_ratio=decrease,` +
-            `pad=1920:1080:-1:-1,${kenBurnsEffect},format=yuv420p" ` +
-            `-c:v libx264 -r ${fps} -y "${silentVideoPath}"`
-        );
-        
-        const outputFilename = `video-final-turbo-${Date.now()}.mp4`;
-        const outputPath = path.join(processedDir, outputFilename);
-        tempFiles.push(outputPath);
-        
-        await runFFmpeg(`ffmpeg -i "${silentVideoPath}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest -y "${outputPath}"`);
-        
-        res.sendFile(outputPath, (err) => {
-            if (err) console.error('Erro ao enviar vídeo final:', err);
-            tempFiles.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
-        });
-
-    } catch (e) {
-        tempFiles.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
-        res.status(500).send(e.message);
-    }
-});
-
-
-// 6. Iniciar Servidor
-app.listen(PORT, () => {
-    console.log(`Servidor a correr na porta ${PORT}`);
-});
-
-
+// --- Mixar Vídeo
