@@ -18,7 +18,13 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
 // 3. Middlewares
-app.use(cors());
+const allowedOrigin = "https://3gr0qcjith2lshzd81al6pzeg6y8sjyql88u7aykfz3p0wd6ry-h794075209.scf.usercontent.goog"; // frontend
+app.use(cors({
+    origin: allowedOrigin,       // permite apenas esse domínio
+    methods: ["GET", "POST"],    // métodos permitidos
+    allowedHeaders: ["Content-Type", "Authorization"] // cabeçalhos permitidos
+}));
+
 app.use(express.json({ limit: '50mb' }));
 app.use('/downloads', express.static(processedDir));
 
@@ -29,6 +35,7 @@ const storage = multer.diskStorage({
         cb(null, `${Date.now()}-${safeOriginalName}`);
     }
 });
+
 
 const upload = multer({
     storage: storage,
@@ -438,4 +445,5 @@ app.post('/mixar-video-turbo', upload.single('narration'), async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
