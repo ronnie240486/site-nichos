@@ -340,6 +340,108 @@ app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
     }
 });
 
+// Ferramentas de Áudio
+app.post('/unir-audio', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length < 2) return res.status(400).send('Mínimo 2 áudios.');
+    
+    const fileListPath = path.join(uploadDir, `list-audio-${Date.now()}.txt`);
+    const outputPath = path.join(processedDir, `unido-${Date.now()}.mp3`);
+    const allTempFiles = [...files.map(f => f.path), fileListPath, outputPath];
+    
+    try {
+        const fileContent = files.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
+        fs.writeFileSync(fileListPath, fileContent);
+        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c:a libmp3lame -y "${outputPath}"`);
+        sendZipResponse(res, [{ path: outputPath, name: path.basename(outputPath) }], allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/limpar-metadados-audio', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const processedFiles = [];
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `limpo-${file.filename}`);
+            allTempFiles.push(outputPath);
+            await runFFmpeg(`ffmpeg -i "${file.path}" -map_metadata -1 -c:a copy -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/embaralhar-audio', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length < 2) return res.status(400).send('Mínimo 2 áudios.');
+    
+    const shuffled = files.sort(() => Math.random() - 0.5);
+    const fileListPath = path.join(uploadDir, `list-audio-shuf-${Date.now()}.txt`);
+    const outputPath = path.join(processedDir, `embaralhado-${Date.now()}.mp3`);
+    const allTempFiles = [...files.map(f => f.path), fileListPath, outputPath];
+    
+    try {
+        const fileContent = shuffled.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
+        fs.writeFileSync(fileListPath, fileContent);
+        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c:a libmp3lame -y "${outputPath}"`);
+        sendZipResponse(res, [{ path: outputPath, name: path.basename(outputPath) }], allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/melhorar-audio', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const processedFiles = [];
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `melhorado-${file.filename}`);
+            allTempFiles.push(outputPath);
+            const filters = "highpass=f=200,lowpass=f=3000,acompressor";
+            await runFFmpeg(`ffmpeg -i "${file.path}" -af "${filters}" -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const processedFiles = [];
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `sem-silencio-${file.filename}`);
+            allTempFiles.push(outputPath);
+            const filters = "silenceremove=start_periods=1:start_threshold=-30dB:stop_periods=-1:stop_duration=1:stop_threshold=-30dB";
+            await runFFmpeg(`ffmpeg -i "${file.path}" -af "${filters}" -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
 // --- ROTAS DO IA TURBO ---
 
 app.post('/extrair-audio', upload.single('video'), async (req, res) => {
@@ -784,5 +886,6 @@ app.post('/download-turbo-zip', upload.single('narration'), async (req, res) => 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
