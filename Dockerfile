@@ -4,8 +4,11 @@ FROM node:18-slim
 # 2. Definir o Diretório de Trabalho
 WORKDIR /app
 
-# 3. Instalar o FFmpeg
-RUN apt-get update && apt-get install -y ffmpeg
+# 3. Instalar FFmpeg + frei0r-plugins
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    frei0r-plugins \
+    && rm -rf /var/lib/apt/lists/*
 
 # 4. Copiar Ficheiros do Projeto
 COPY package*.json ./
