@@ -103,7 +103,6 @@ function sendZipResponse(res, filesToZip, allTempFiles) {
     archive.finalize();
 }
 
-// --- FUNÇÃO COMPLETA COM OS 25 EFEITOS ---
 function getEffectFilter(effectName, durationPerImage, dValue, videoWidth, videoHeight) {
     const fadeDuration = Math.min(1, durationPerImage / 2);
     switch (effectName) {
@@ -162,8 +161,13 @@ function getEffectFilter(effectName, durationPerImage, dValue, videoWidth, video
     }
 }
 
+// 5. Rotas
+app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
+app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
+
 // --- ROTAS DE FERRAMENTAS GERAIS ---
 
+// Ferramentas de Vídeo
 app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
@@ -264,73 +268,6 @@ app.post('/remover-audio', upload.array('videos'), async (req, res) => {
             else flags += ' -c:a copy';
             if (req.body.removeMetadata === 'true') flags += ' -map_metadata -1';
             await runFFmpeg(`ffmpeg -i "${file.path}" ${flags} -y "${outputPath}"`);
-            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
-        }
-        sendZipResponse(res, processedFiles, allTempFiles);
-    } catch (e) {
-        safeDeleteFiles(allTempFiles);
-        res.status(500).send(e.message);
-    }
-});
-
-// --- ROTAS DE FERRAMENTAS GERAIS ---
-
-app.post('/cortar-video', upload.array('videos'), async (req, res) => {
-    const files = req.files || [];
-    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
-    
-    const allTempFiles = files.map(f => f.path);
-    try {
-        const { startTime, endTime } = req.body;
-        const processedFiles = [];
-        for (const file of files) {
-            const outputPath = path.join(processedDir, `cortado-${file.filename}`);
-            allTempFiles.push(outputPath);
-            await runFFmpeg(`ffmpeg -i "${file.path}" -ss ${startTime} -to ${endTime} -c copy -y "${outputPath}"`);
-            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
-        }
-        sendZipResponse(res, processedFiles, allTempFiles);
-    } catch (e) {
-        safeDeleteFiles(allTempFiles);
-        res.status(500).send(e.message);
-    }
-});
-
-app.post('/unir-videos', upload.array('videos'), async (req, res) => {
-    const files = req.files || [];
-    if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
-    
-    const fileListPath = path.join(uploadDir, `list-${Date.now()}.txt`);
-    const outputPath = path.join(processedDir, `unido-${Date.now()}.mp4`);
-    const allTempFiles = [...files.map(f => f.path), fileListPath, outputPath];
-    
-    try {
-        const fileContent = files.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
-        fs.writeFileSync(fileListPath, fileContent);
-        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy -y "${outputPath}"`);
-        sendZipResponse(res, [{ path: outputPath, name: path.basename(outputPath) }], allTempFiles);
-    } catch (e) {
-        safeDeleteFiles(allTempFiles);
-        res.status(500).send(e.message);
-    }
-});
-
-app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
-    const files = req.files || [];
-    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
-
-    const allTempFiles = files.map(f => f.path);
-    try {
-        const quality = req.body.quality;
-        const crfMap = { alta: '18', media: '23', baixa: '28' };
-        const crf = crfMap[quality];
-        if (!crf) throw new Error('Qualidade inválida.');
-
-        const processedFiles = [];
-        for (const file of files) {
-            const outputPath = path.join(processedDir, `comprimido-${file.filename}`);
-            allTempFiles.push(outputPath);
-            await runFFmpeg(`ffmpeg -i "${file.path}" -vcodec libx264 -crf ${crf} -preset fast -y "${outputPath}"`);
             processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
         }
         sendZipResponse(res, processedFiles, allTempFiles);
@@ -442,24 +379,47 @@ app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
     }
 });
 
+
 // --- ROTAS DO IA TURBO ---
 
-app.post('/extrair-audio', upload.single('video'), async (req, res) => {
-    const file = req.file;
-    if (!file) return res.status(400).send('Nenhum ficheiro de vídeo enviado.');
+app.post('/extrair-audio', upload.any(), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
 
-    const allTempFiles = [file.path];
-    try {
-        const outputPath = path.join(processedDir, `audio-ext-${Date.now()}.wav`);
-        allTempFiles.push(outputPath);
-        await runFFmpeg(`ffmpeg -i "${file.path}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y "${outputPath}"`);
-        res.sendFile(outputPath, (err) => {
-            if (err) console.error('Erro ao enviar ficheiro de áudio:', err);
+    // Rota IA Turbo (single file, fieldname 'video')
+    if (files.length === 1 && files[0].fieldname === 'video') {
+        const file = files[0];
+        const allTempFiles = [file.path];
+        try {
+            const outputPath = path.join(processedDir, `audio-ext-${Date.now()}.wav`);
+            allTempFiles.push(outputPath);
+            await runFFmpeg(`ffmpeg -i "${file.path}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y "${outputPath}"`);
+            res.sendFile(outputPath, (err) => {
+                if (err) console.error('Erro ao enviar ficheiro de áudio:', err);
+                safeDeleteFiles(allTempFiles);
+            });
+        } catch (e) {
             safeDeleteFiles(allTempFiles);
-        });
-    } catch (e) {
-        safeDeleteFiles(allTempFiles);
-        res.status(500).send(e.message);
+            res.status(500).send(e.message);
+        }
+    } 
+    // Rota Ferramenta Genérica (multiple files, fieldname 'videos')
+    else {
+        const allTempFiles = files.map(f => f.path);
+        try {
+            const processedFiles = [];
+            for (const file of files) {
+                const outputFilename = `${path.parse(file.filename).name}.mp3`;
+                const outputPath = path.join(processedDir, `extraido-${outputFilename}`);
+                allTempFiles.push(outputPath);
+                await runFFmpeg(`ffmpeg -i "${file.path}" -vn -q:a 0 -map a -y "${outputPath}"`);
+                processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+            }
+            sendZipResponse(res, processedFiles, allTempFiles);
+        } catch (e) {
+            safeDeleteFiles(allTempFiles);
+            res.status(500).send(e.message);
+        }
     }
 });
 
@@ -513,7 +473,8 @@ app.post('/extrair-frames', upload.single('video'), async (req, res) => {
         const uniquePrefix = `frame-${Date.now()}`;
         const outputPattern = path.join(processedDir, `${uniquePrefix}-%03d.png`);
         
-        await runFFmpeg(`ffmpeg -i "${file.path}" -vf fps=1 -y "${outputPattern}"`);
+        const fps = parseInt(req.body.fps) || 5;
+        await runFFmpeg(`ffmpeg -i "${file.path}" -vf fps=${fps} -y "${outputPattern}"`);
         
         const frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
         allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
@@ -532,73 +493,9 @@ app.post('/extrair-frames', upload.single('video'), async (req, res) => {
     }
 });
 
-// --- ROTA OTIMIZADA COM COMANDO ÚNICO ---
-app.post('/mixar-video-turbo', upload.single('narration'), async (req, res) => {
-    const narrationFile = req.file;
-    const { images, script, imageDuration } = req.body;
-    if (!narrationFile || !images || !script) {
-        if (narrationFile) safeDeleteFiles([narrationFile.path]);
-        return res.status(400).send('Dados insuficientes para mixar o vídeo.');
-    }
-
-    let allTempFiles = [narrationFile.path];
-    try {
-        const imageArray = JSON.parse(images);
-        const imagePaths = imageArray.map((dataUrl, i) => {
-            const base64Data = dataUrl.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
-            const imagePath = path.join(uploadDir, `turbo-img-${Date.now()}-${i}.png`);
-            fs.writeFileSync(imagePath, base64Data, 'base64');
-            allTempFiles.push(imagePath);
-            return imagePath;
-        });
-
-        let durationPerImage;
-        const parsedImageDuration = parseFloat(imageDuration);
-        if (parsedImageDuration > 0) {
-            durationPerImage = parsedImageDuration;
-        } else {
-            const audioDuration = await getMediaDuration(narrationFile.path);
-            durationPerImage = audioDuration / imagePaths.length;
-        }
-
-        const fileListPath = path.join(uploadDir, `list-turbo-${Date.now()}.txt`);
-        allTempFiles.push(fileListPath);
-        
-        let fileContent = "";
-        imagePaths.forEach((p, i) => {
-            const safePath = p.replace(/'/g, "'\\''");
-            if (i < imagePaths.length - 1) {
-                fileContent += `file '${safePath}'\nduration ${durationPerImage}\n`;
-            } else {
-                fileContent += `file '${safePath}'\n`;
-            }
-        });
-        fs.writeFileSync(fileListPath, fileContent);
-        
-        const frameRate = 25;
-        const totalFrames = Math.max(1, Math.round(durationPerImage * frameRate));
-        const outputPath = path.join(processedDir, `turbo-${Date.now()}.mp4`);
-        allTempFiles.push(outputPath);
-
-        const ffmpegCmd = `ffmpeg -f concat -safe 0 -i "${fileListPath}" -i "${narrationFile.path}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:-1:-1,zoompan=z='min(zoom+0.0015,1.5)':d=${totalFrames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1920x1080,format=yuv420p" -c:v libx264 -r ${frameRate} -c:a aac -shortest "${outputPath}" -y`;
-        
-        await runFFmpeg(ffmpegCmd.trim());
-
-        res.sendFile(outputPath, (err) => {
-            if (err) console.error('Erro ao enviar vídeo final:', err);
-            safeDeleteFiles(allTempFiles);
-        });
-
-    } catch (e) {
-        safeDeleteFiles(allTempFiles);
-        res.status(500).send(e.message);
-    }
-});
-
-// --- ROTA AVANÇADA PARA VÍDEOS LONGOS COM LEGENDAS ---
 app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, res) => {
     const narrationFile = req.file;
-    const { images, script, imageDuration, videoType, blockSize } = req.body;
+    const { images, script, imageDuration, videoType, blockSize, transition } = req.body;
 
     if (!narrationFile || !images || !script) {
         if (narrationFile) safeDeleteFiles([narrationFile.path]);
@@ -659,11 +556,12 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
             allTempFiles.push(silentVideoPath);
             const fps = 25;
             const dValue = Math.max(1, Math.round(durationPerImage * fps));
-            const kenBurnsEffect = `zoompan=z='min(zoom+0.0015,1.5)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${videoWidth}x${videoHeight}`;
+            
+            const effectFilter = getEffectFilter(transition, durationPerImage, dValue, videoWidth, videoHeight);
 
             await runFFmpeg(
                 `ffmpeg -f concat -safe 0 -i "${fileListPath}" ` +
-                `-vf "scale=${videoWidth}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${videoWidth}:${videoHeight}:-1:-1,${kenBurnsEffect},format=yuv420p" ` +
+                `-vf "scale=${videoWidth}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${videoWidth}:${videoHeight}:-1:-1,${effectFilter},format=yuv420p" ` +
                 `-c:v libx264 -r ${fps} -y "${silentVideoPath}"`
             );
 
@@ -729,162 +627,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
     }
 });
 
-// --- ROTA PARA GERAR ZIP COMPLETO ---
-app.post('/download-turbo-zip', upload.single('narration'), async (req, res) => {
-    const narrationFile = req.file;
-    const { images, script, imageDuration, videoType, blockSize } = req.body;
-
-    if (!narrationFile || !images || !script) {
-        if (narrationFile) safeDeleteFiles([narrationFile.path]);
-        return res.status(400).send('Dados insuficientes para criar o ZIP.');
-    }
-
-    const imageArray = JSON.parse(images);
-    const scriptLines = script.split(/\r?\n/).filter(l => l.trim() !== '');
-    let allTempFiles = [narrationFile.path];
-    const filesToZip = [];
-
-    try {
-        const isShort = videoType === 'short';
-        const videoWidth = isShort ? 1080 : 1920;
-        const videoHeight = isShort ? 1920 : 1080;
-
-        const blocks = [];
-        const blockLen = parseInt(blockSize) || 10;
-        for (let i = 0; i < imageArray.length; i += blockLen) {
-            blocks.push(imageArray.slice(i, i + blockLen));
-        }
-
-        const blockVideoPaths = [];
-
-        for (let b = 0; b < blocks.length; b++) {
-            const blockImages = blocks[b];
-            const imagePaths = blockImages.map((dataUrl, i) => {
-                const base64Data = dataUrl.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
-                const imagePath = path.join(uploadDir, `block${b}-${Date.now()}-${i}.png`);
-                fs.writeFileSync(imagePath, base64Data, 'base64');
-                allTempFiles.push(imagePath);
-                filesToZip.push({ path: imagePath, name: `images/block${b}-image${i}.png` });
-                return imagePath;
-            });
-
-            let durationPerImage;
-            const parsedImageDuration = parseFloat(imageDuration);
-            if (parsedImageDuration > 0) {
-                durationPerImage = parsedImageDuration;
-            } else {
-                const audioDuration = await getMediaDuration(narrationFile.path);
-                durationPerImage = audioDuration / imageArray.length;
-            }
-
-            const fileListPath = path.join(uploadDir, `list-block${b}-${Date.now()}.txt`);
-            let fileContent = "";
-            imagePaths.forEach((p, i) => {
-                const safePath = p.replace(/'/g, "'\\''");
-                if (i < imagePaths.length - 1) {
-                    fileContent += `file '${safePath}'\nduration ${durationPerImage}\n`;
-                } else {
-                    fileContent += `file '${safePath}'\n`;
-                }
-            });
-            fs.writeFileSync(fileListPath, fileContent);
-            allTempFiles.push(fileListPath);
-
-            const silentVideoPath = path.join(processedDir, `silent-block${b}-${Date.now()}.mp4`);
-            allTempFiles.push(silentVideoPath);
-            blockVideoPaths.push(silentVideoPath);
-            filesToZip.push({ path: silentVideoPath, name: `videos/silent-block${b}.mp4` });
-
-            const fps = 25;
-            const dValue = Math.max(1, Math.round(durationPerImage * fps));
-            const kenBurnsEffect = `zoompan=z='min(zoom+0.0015,1.5)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${videoWidth}x${videoHeight}`;
-
-            await runFFmpeg(
-                `ffmpeg -f concat -safe 0 -i "${fileListPath}" ` +
-                `-vf "scale=${videoWidth}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${videoWidth}:${videoHeight}:-1:-1,${kenBurnsEffect},format=yuv420p" ` +
-                `-c:v libx264 -r ${fps} -y "${silentVideoPath}"`
-            );
-        }
-
-        const finalListPath = path.join(uploadDir, `list-final-${Date.now()}.txt`);
-        const fileContentFinal = blockVideoPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
-        fs.writeFileSync(finalListPath, fileContentFinal);
-        allTempFiles.push(finalListPath);
-
-        const finalSilentPath = path.join(processedDir, `silent-final-${Date.now()}.mp4`);
-        allTempFiles.push(finalSilentPath);
-        filesToZip.push({ path: finalSilentPath, name: 'videos/final-silent.mp4' });
-        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${finalListPath}" -c copy -y "${finalSilentPath}"`);
-
-        // Legendas SRT
-        let srtContent = "";
-        let currentTime = 0.0;
-        const audioDuration = await getMediaDuration(narrationFile.path);
-        const totalWords = scriptLines.reduce((acc, l) => acc + l.split(/\s+/).length, 0);
-        const perWordDuration = totalWords > 0 ? audioDuration / totalWords : 0;
-
-        function formatTime(seconds) {
-            const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
-            const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
-            const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-            const ms = Math.floor((seconds % 1) * 1000).toString().padStart(3, '0');
-            return `${h}:${m}:${s},${ms}`;
-        }
-
-        scriptLines.forEach((line, index) => {
-            const wordsCount = line.split(/\s+/).length;
-            const duration = perWordDuration * wordsCount;
-            const start = formatTime(currentTime);
-            const end = formatTime(currentTime + duration);
-            srtContent += `${index + 1}\n${start} --> ${end}\n${line}\n\n`;
-            currentTime += duration;
-        });
-
-        const srtPath = path.join(uploadDir, `subtitles-${Date.now()}.srt`);
-        fs.writeFileSync(srtPath, srtContent);
-        allTempFiles.push(srtPath);
-        filesToZip.push({ path: srtPath, name: 'subtitles.srt' });
-
-        // Áudio de narração
-        filesToZip.push({ path: narrationFile.path, name: 'narration.wav' });
-
-        // Vídeo final com áudio e legendas
-        const outputFinalPath = path.join(processedDir, `video-final-turbo-zip-${Date.now()}.mp4`);
-        allTempFiles.push(outputFinalPath);
-        filesToZip.push({ path: outputFinalPath, name: 'video-final.mp4' });
-
-        await runFFmpeg(
-            `ffmpeg -i "${finalSilentPath}" -i "${narrationFile.path}" ` +
-            `-vf "subtitles='${srtPath.replace(/\\/g, '/')}'" ` +
-            `-c:v libx264 -c:a aac -shortest -y "${outputFinalPath}"`
-        );
-
-        // Cria e envia ZIP
-        const archive = archiver('zip', { zlib: { level: 9 } });
-        res.setHeader('Content-Type', 'application/zip');
-        res.setHeader('Content-Disposition', 'attachment; filename=darkmaker-turbo.zip');
-        archive.on('error', (err) => { 
-            console.error("Erro no Archiver:", err);
-            safeDeleteFiles(allTempFiles);
-        });
-        res.on('close', () => {
-             safeDeleteFiles(allTempFiles);
-        });
-        archive.pipe(res);
-        filesToZip.forEach(file => {
-            archive.file(file.path, { name: file.name });
-        });
-        archive.finalize();
-
-    } catch (e) {
-        safeDeleteFiles(allTempFiles);
-        res.status(500).send(e.message);
-    }
-});
-
 // 6. Iniciar Servidor
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
-
-
