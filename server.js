@@ -68,7 +68,7 @@ app.post('/youtube-audio', async (req, res) => {
                 wav: wavPath,
                 mp3: mp3Path
             });
-// 4. Funções Auxiliares
+// 6. Funções Auxiliares
 function runFFmpeg(command, options = {}) {
     return new Promise((resolve, reject) => {
         console.log(`Executando FFmpeg: ${command}`);
@@ -913,10 +913,11 @@ app.post('/download-turbo-zip', upload.single('narration'), async (req, res) => 
     }
 });
 
-// 6. Iniciar Servidor
+// 7. Iniciar Servidor
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
