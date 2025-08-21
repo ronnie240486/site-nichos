@@ -162,9 +162,116 @@ function getEffectFilter(effectName, durationPerImage, dValue, videoWidth, video
     }
 }
 
-// 5. Rotas
-app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
-app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
+// --- ROTAS DE FERRAMENTAS GERAIS ---
+
+app.post('/cortar-video', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+    
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const { startTime, endTime } = req.body;
+        const processedFiles = [];
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `cortado-${file.filename}`);
+            allTempFiles.push(outputPath);
+            await runFFmpeg(`ffmpeg -i "${file.path}" -ss ${startTime} -to ${endTime} -c copy -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/unir-videos', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
+    
+    const fileListPath = path.join(uploadDir, `list-${Date.now()}.txt`);
+    const outputPath = path.join(processedDir, `unido-${Date.now()}.mp4`);
+    const allTempFiles = [...files.map(f => f.path), fileListPath, outputPath];
+    
+    try {
+        const fileContent = files.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
+        fs.writeFileSync(fileListPath, fileContent);
+        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy -y "${outputPath}"`);
+        sendZipResponse(res, [{ path: outputPath, name: path.basename(outputPath) }], allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const quality = req.body.quality;
+        const crfMap = { alta: '18', media: '23', baixa: '28' };
+        const crf = crfMap[quality];
+        if (!crf) throw new Error('Qualidade inválida.');
+
+        const processedFiles = [];
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `comprimido-${file.filename}`);
+            allTempFiles.push(outputPath);
+            await runFFmpeg(`ffmpeg -i "${file.path}" -vcodec libx264 -crf ${crf} -preset fast -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
+    
+    const shuffled = files.sort(() => Math.random() - 0.5);
+    const fileListPath = path.join(uploadDir, `list-shuf-${Date.now()}.txt`);
+    const outputPath = path.join(processedDir, `embaralhado-${Date.now()}.mp4`);
+    const allTempFiles = [...files.map(f => f.path), fileListPath, outputPath];
+    
+    try {
+        const fileContent = shuffled.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
+        fs.writeFileSync(fileListPath, fileContent);
+        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy -y "${outputPath}"`);
+        sendZipResponse(res, [{ path: outputPath, name: path.basename(outputPath) }], allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/remover-audio', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const processedFiles = [];
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `processado-${file.filename}`);
+            allTempFiles.push(outputPath);
+            let flags = '-c:v copy';
+            if (req.body.removeAudio === 'true') flags += ' -an';
+            else flags += ' -c:a copy';
+            if (req.body.removeMetadata === 'true') flags += ' -map_metadata -1';
+            await runFFmpeg(`ffmpeg -i "${file.path}" ${flags} -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
 
 // --- ROTAS DE FERRAMENTAS GERAIS ---
 
@@ -677,4 +784,5 @@ app.post('/download-turbo-zip', upload.single('narration'), async (req, res) => 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
