@@ -78,9 +78,160 @@ function safeDeleteFiles(files) {
     });
 }
 
+function sendZipResponse(res, filesToZip, allTempFiles) {
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=resultado.zip');
+    
+    archive.on('error', (err) => { 
+        console.error("Erro no Archiver:", err);
+        safeDeleteFiles(allTempFiles);
+        if (!res.headersSent) {
+            res.status(500).send("Erro ao criar o arquivo zip.");
+        }
+    });
+
+    res.on('close', () => {
+        console.log('Conexão fechada, limpando ficheiros.');
+        safeDeleteFiles(allTempFiles);
+    });
+
+    archive.pipe(res);
+    filesToZip.forEach(file => {
+        archive.file(file.path, { name: file.name });
+    });
+    archive.finalize();
+}
+
+// --- FUNÇÃO COMPLETA COM OS 25 EFEITOS ---
+function getEffectFilter(effectName, durationPerImage, dValue, videoWidth, videoHeight) {
+    const fadeDuration = Math.min(1, durationPerImage / 2);
+    switch (effectName) {
+        case 'zoom':
+            return `zoompan=z='min(zoom+0.0015,1.5)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${videoWidth}x${videoHeight}`;
+        case 'fade':
+            return `fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${durationPerImage - fadeDuration}:d=${fadeDuration}`;
+        case 'glitch':
+            return `frei0r=glitch0r`;
+        case 'retro':
+            return `vignette,format=yuv420p`;
+        case 'blur':
+            return `gblur=sigma=5:enable='between(t,0,${durationPerImage})'`;
+        case 'grayscale':
+            return `format=gray`;
+        case 'sepia':
+            return `colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131`;
+        case 'shake':
+            return `frei0r=vertigo`;
+        case 'flash':
+            return `colorlevels=rimin=0.5:gimin=0.5:bimin=0.5`;
+        case 'invert':
+            return `negate`;
+        case 'slide-left':
+            return `overlay=x='-w+(t/${durationPerImage})*w':y=0`;
+        case 'slide-right':
+            return `overlay=x='w-(t/${durationPerImage})*w':y=0`;
+        case 'slide-up':
+            return `overlay=x=0:y='-h+(t/${durationPerImage})*h'`;
+        case 'slide-down':
+            return `overlay=x=0:y='h-(t/${durationPerImage})*h'`;
+        case 'rotate':
+            return `rotate=angle=2*PI*t/${durationPerImage}:fillcolor=black`;
+        case 'pulse':
+            return `scale=w='iw*abs(1.05-0.05*sin(2*PI*t/${durationPerImage}))':h='ih*abs(1.05-0.05*sin(2*PI*t/${durationPerImage}))'`;
+        case 'neon':
+            return `frei0r=glow`;
+        case 'rainbow':
+            return `frei0r=rgbparade`;
+        case 'old-film':
+            return `frei0r=oldfilm`;
+        case 'pixel':
+            return `pixelize=w=32:h=32`;
+        case 'cartoon':
+            return `frei0r=cartoon`;
+        case 'matrix':
+            return `frei0r=matrix`;
+        case '3d':
+            return `frei0r=threed`;
+        case 'mirror':
+            return `hflip`;
+        case 'fire':
+            return `frei0r=burn`;
+        default:
+            return `zoompan=z='min(zoom+0.0015,1.5)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${videoWidth}x${videoHeight}`;
+    }
+}
+
 // 5. Rotas
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
+
+// --- ROTAS DE FERRAMENTAS GERAIS ---
+
+app.post('/cortar-video', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+    
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const { startTime, endTime } = req.body;
+        const processedFiles = [];
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `cortado-${file.filename}`);
+            allTempFiles.push(outputPath);
+            await runFFmpeg(`ffmpeg -i "${file.path}" -ss ${startTime} -to ${endTime} -c copy -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/unir-videos', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length < 2) return res.status(400).send('Mínimo 2 vídeos.');
+    
+    const fileListPath = path.join(uploadDir, `list-${Date.now()}.txt`);
+    const outputPath = path.join(processedDir, `unido-${Date.now()}.mp4`);
+    const allTempFiles = [...files.map(f => f.path), fileListPath, outputPath];
+    
+    try {
+        const fileContent = files.map(f => `file '${f.path.replace(/'/g, "'\\''")}'`).join('\n');
+        fs.writeFileSync(fileListPath, fileContent);
+        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy -y "${outputPath}"`);
+        sendZipResponse(res, [{ path: outputPath, name: path.basename(outputPath) }], allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
+app.post('/comprimir-videos', upload.array('videos'), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const quality = req.body.quality;
+        const crfMap = { alta: '18', media: '23', baixa: '28' };
+        const crf = crfMap[quality];
+        if (!crf) throw new Error('Qualidade inválida.');
+
+        const processedFiles = [];
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `comprimido-${file.filename}`);
+            allTempFiles.push(outputPath);
+            await runFFmpeg(`ffmpeg -i "${file.path}" -vcodec libx264 -crf ${crf} -preset fast -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
 
 // --- ROTAS DO IA TURBO ---
 
@@ -526,3 +677,4 @@ app.post('/download-turbo-zip', upload.single('narration'), async (req, res) => 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
