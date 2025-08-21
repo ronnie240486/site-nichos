@@ -1,74 +1,43 @@
-// 1. Importações
+// 1. Importação de Módulos
 const express = require('express');
 const multer = require('multer');
 const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
+const archiver = require('archiver');
+const { SpeechClient } = require('@google-cloud/speech');
 
-// 2. Configuração inicial
+// 2. Configuração Inicial
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
+
+const uploadDir = path.join(__dirname, 'uploads');
+const processedDir = path.join(__dirname, 'processed');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
+
+// 3. Middlewares
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use('/downloads', express.static(processedDir));
 
-// 3. Configuração Multer para upload
-const upload = multer({ dest: 'uploads/' });
-
-// 4. Rota para upload de vídeo local
-app.post('/upload-video', upload.single('video'), (req, res) => {
-    if (!req.file) return res.status(400).send('Nenhum arquivo enviado.');
-
-    const inputPath = req.file.path;
-    const baseName = path.parse(req.file.originalname).name;
-    const wavPath = `processed/${baseName}.wav`;
-    const mp3Path = `processed/${baseName}.mp3`;
-
-    // Criar pasta processed se não existir
-    if (!fs.existsSync('processed')) fs.mkdirSync('processed');
-
-    // 4.1 Gerar WAV
-    exec(`ffmpeg -i "${inputPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 "${wavPath}"`, (err) => {
-        if (err) return res.status(500).send(`Erro ao gerar WAV: ${err.message}`);
-
-        // 4.2 Gerar MP3
-        exec(`ffmpeg -i "${inputPath}" -vn -acodec libmp3lame -q:a 2 "${mp3Path}"`, (err2) => {
-            if (err2) return res.status(500).send(`Erro ao gerar MP3: ${err2.message}`);
-
-            res.send({
-                message: 'Áudio extraído com sucesso!',
-                wav: wavPath,
-                mp3: mp3Path
-            });
-        });
-    });
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadDir),
+    filename: (req, file, cb) => {
+        const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(null, `${Date.now()}-${safeOriginalName}`);
+    }
 });
 
-// 5. Rota para extrair áudio de YouTube
-app.post('/youtube-audio', async (req, res) => {
-    const { url } = req.body;
-    if (!url) return res.status(400).send('URL do YouTube é obrigatória.');
+const upload = multer({
+    storage: storage,
+    limits: {
+        fieldSize: 50 * 1024 * 1024
+    }
+});
 
-    const baseName = `youtube_${Date.now()}`;
-    const wavPath = `processed/${baseName}.wav`;
-    const mp3Path = `processed/${baseName}.mp3`;
-
-    if (!fs.existsSync('processed')) fs.mkdirSync('processed');
-
-    // 5.1 Baixar e converter para WAV
-    exec(`yt-dlp -x --audio-format wav -o "processed/${baseName}.wav" ${url}`, (err) => {
-        if (err) return res.status(500).send(`Erro ao gerar WAV: ${err.message}`);
-
-        // 5.2 Baixar e converter para MP3
-        exec(`yt-dlp -x --audio-format mp3 -o "processed/${baseName}.mp3" ${url}`, (err2) => {
-            if (err2) return res.status(500).send(`Erro ao gerar MP3: ${err2.message}`);
-
-            res.send({
-                message: 'Áudio do YouTube extraído com sucesso!',
-                wav: wavPath,
-                mp3: mp3Path
-            });
-// 6. Funções Auxiliares
+// 4. Funções Auxiliares
 function runFFmpeg(command, options = {}) {
     return new Promise((resolve, reject) => {
         console.log(`Executando FFmpeg: ${command}`);
@@ -913,12 +882,9 @@ app.post('/download-turbo-zip', upload.single('narration'), async (req, res) => 
     }
 });
 
-// 7. Iniciar Servidor
+// 6. Iniciar Servidor
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
-
-
-
 
 
