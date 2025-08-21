@@ -473,11 +473,18 @@ app.post('/extrair-frames', upload.single('video'), async (req, res) => {
         const uniquePrefix = `frame-${Date.now()}`;
         const outputPattern = path.join(processedDir, `${uniquePrefix}-%03d.png`);
         
-        const fps = parseInt(req.body.fps) || 5;
-        await runFFmpeg(`ffmpeg -i "${file.path}" -vf fps=${fps} -y "${outputPattern}"`);
+        const sceneDetectionThreshold = 0.4;
+        await runFFmpeg(`ffmpeg -i "${file.path}" -vf "select='gt(scene,${sceneDetectionThreshold})'" -vsync vfr -y "${outputPattern}"`);
         
-        const frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
+        let frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
         allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
+
+        if (frameFiles.length === 0) {
+            console.log("Nenhuma mudança de cena detectada. Extraindo frames a cada 5 segundos.");
+            await runFFmpeg(`ffmpeg -i "${file.path}" -vf fps=1/5 -y "${outputPattern}"`);
+            frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
+            allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
+        }
 
         const base64Frames = frameFiles.map(frameFile => {
             const framePath = path.join(processedDir, frameFile);
