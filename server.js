@@ -1,4 +1,5 @@
 // 1. Importação de Módulos
+const fetch = require('node-fetch');
 const express = require('express');
 const multer = require('multer');
 const { exec } = require('child_process');
@@ -493,6 +494,84 @@ app.post('/separar-faixas', upload.array('videos'), async (req, res) => {
 });
 
 // --- FIM DO CÓDIGO ADICIONADO ---
+// ROTA CORRIGIDA PARA GERAR MÚSICA COM REPLICATE (ASSÍNCRONA)
+app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
+    const allTempFiles = (req.files || []).map(f => f.path);
+    try {
+        const { descricao } = req.body;
+        const replicateApiKey = req.headers['x-replicate-api-key']; // Esperamos que o frontend envie a chave no header
+
+        if (!descricao) {
+            return res.status(400).send('A descrição da música é obrigatória.');
+        }
+        if (!replicateApiKey) {
+            return res.status(400).send('A chave da API da Replicate não foi fornecida.');
+        }
+
+        console.log(`Iniciando geração de música para: "${descricao}"`);
+
+        // Etapa 1: Iniciar a predição na Replicate
+        const startResponse = await fetch("https://api.replicate.com/v1/predictions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Token ${replicateApiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                version: "8cf61ea6c56afd61d8f5b9ffd14d7c216c0a93844ce2d82ac1c9ecc9c7f24e05", // Versão do modelo MusicGen
+                input: {
+                    model_version: "stereo-large",
+                    prompt: descricao,
+                    duration: 10 // Duração em segundos (pode ajustar)
+                },
+            }),
+        });
+
+        const prediction = await startResponse.json();
+        if (startResponse.status !== 201) {
+            throw new Error(prediction.detail || "Falha ao iniciar a geração na Replicate.");
+        }
+
+        let predictionUrl = prediction.urls.get;
+        let generatedMusicUrl = null;
+
+        // Etapa 2: Verificar o estado da predição até estar concluída
+        while (!generatedMusicUrl) {
+            console.log("A verificar o estado da geração...");
+            await new Promise(resolve => setTimeout(resolve, 3000)); // Espera 3 segundos
+
+            const statusResponse = await fetch(predictionUrl, {
+                headers: { "Authorization": `Token ${replicateApiKey}` },
+            });
+            const statusResult = await statusResponse.json();
+
+            if (statusResult.status === "succeeded") {
+                generatedMusicUrl = statusResult.output;
+                break;
+            } else if (statusResult.status === "failed") {
+                throw new Error("A geração da música falhou na Replicate.");
+            }
+        }
+
+        console.log("Música gerada com sucesso:", generatedMusicUrl);
+
+        // Etapa 3: Fazer o download da música gerada e enviá-la ao utilizador
+        const musicResponse = await fetch(generatedMusicUrl);
+        if (!musicResponse.ok) {
+            throw new Error("Falha ao fazer o download da música gerada.");
+        }
+
+        res.setHeader('Content-Type', 'audio/mpeg');
+        musicResponse.body.pipe(res);
+
+    } catch (error) {
+        console.error('Erro ao gerar música:', error);
+        safeDeleteFiles(allTempFiles);
+        if (!res.headersSent) {
+            res.status(500).send(`Erro interno ao gerar a música: ${error.message}`);
+        }
+    }
+});
 
 
 // --- ROTAS DO IA TURBO ---
@@ -753,6 +832,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
