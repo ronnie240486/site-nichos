@@ -1,5 +1,4 @@
 // 1. Importação de Módulos
-const fetch = require('node-fetch');
 const express = require('express');
 const multer = require('multer');
 const { exec } = require('child_process');
@@ -8,6 +7,8 @@ const fs = require('fs');
 const cors = require('cors');
 const archiver = require('archiver');
 const { SpeechClient } = require('@google-cloud/speech');
+const fetch = require('node-fetch');
+const FormData = require('form-data');
 
 // 2. Configuração Inicial
 const app = express();
@@ -584,6 +585,67 @@ app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     }
 });
 
+// ROTA PARA INPAINTING (PREENCHIMENTO MÁGICO)
+app.post('/inpainting', upload.fields([
+    { name: 'image', maxCount: 1 },
+    { name: 'mask', maxCount: 1 }
+]), async (req, res) => {
+    const imageFile = req.files.image?.[0];
+    const maskFile = req.files.mask?.[0];
+    const { prompt } = req.body;
+    const allTempFiles = [imageFile?.path, maskFile?.path].filter(Boolean);
+
+    if (!imageFile || !maskFile || !prompt) {
+        safeDeleteFiles(allTempFiles);
+        return res.status(400).send('Faltam a imagem, a máscara ou o prompt.');
+    }
+
+    try {
+        const stabilityApiKey = process.env.STABILITY_API_KEY || req.headers['x-stability-api-key'];
+        if (!stabilityApiKey) throw new Error("A chave da API da Stability AI não está configurada.");
+
+        console.log("Iniciando processo de Inpainting...");
+
+        const formData = new FormData();
+        formData.append('init_image', fs.createReadStream(imageFile.path));
+        formData.append('mask_image', fs.createReadStream(maskFile.path));
+        formData.append('mask_source', 'MASK_IMAGE_WHITE');
+        formData.append('text_prompts[0][text]', prompt);
+        formData.append('cfg_scale', 7);
+        formData.append('samples', 1);
+        formData.append('steps', 30);
+
+        const response = await fetch(
+            "https://api.stability.ai/v1/generation/stable-diffusion-v1-6/image-to-image/masking",
+            {
+                method: 'POST',
+                headers: { ...formData.getHeaders(), 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` },
+                body: formData,
+            }
+        );
+
+        if (!response.ok) throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`);
+
+        const responseJSON = await response.json();
+        const image = responseJSON.artifacts[0];
+        
+        const outputPath = path.join(processedDir, `inpainted-${Date.now()}.png`);
+        fs.writeFileSync(outputPath, Buffer.from(image.base64, 'base64'));
+        allTempFiles.push(outputPath);
+
+        console.log("Inpainting concluído. Enviando imagem...");
+        res.sendFile(outputPath, (err) => {
+            if (err) console.error('Erro ao enviar a imagem de inpainting:', err);
+            safeDeleteFiles(allTempFiles);
+        });
+
+    } catch (error) {
+        console.error('Erro no processo de Inpainting:', error);
+        safeDeleteFiles(allTempFiles);
+        if (!res.headersSent) res.status(500).send(`Erro interno no Inpainting: ${error.message}`);
+    }
+});
+
 
 // --- ROTAS DO IA TURBO ---
 
@@ -843,6 +905,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
