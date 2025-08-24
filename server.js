@@ -381,7 +381,7 @@ app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
 
 // --- INÍCIO DO CÓDIGO ADICIONADO ---
 
-app.post('/gerar-musica', upload.none(), async (req, res) => {
+app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     // O 'upload.none()' é usado porque esta rota não espera ficheiros, apenas texto.
     try {
         const { descricao } = req.body; // Pega a descrição enviada pelo frontend
@@ -708,4 +708,5 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
