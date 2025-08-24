@@ -379,34 +379,79 @@ app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
     }
 });
 
-// --- INÍCIO DO CÓDIGO ADICIONADO ---
-
+// ROTA CORRIGIDA E FUNCIONAL (EXEMPLO)
 app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
-    // O 'upload.none()' é usado porque esta rota não espera ficheiros, apenas texto.
+    const allTempFiles = (req.files || []).map(f => f.path);
     try {
-        const { descricao } = req.body; // Pega a descrição enviada pelo frontend
+        const { descricao } = req.body;
         if (!descricao) {
             return res.status(400).send('A descrição da música é obrigatória.');
         }
 
-        console.log(`Pedido para gerar música com a descrição: "${descricao}"`);
+        console.log(`Iniciando geração de música para: "${descricao}"`);
 
         // ===================================================================
-        // AQUI VAI A SUA LÓGICA DE IA PARA GERAR MÚSICA
-        // 1. Chame a sua API de geração de música (ex: Suno, MusicFX, etc.)
-        // 2. Receba o ficheiro de áudio da API.
+        // ETAPA 1: CHAMAR A SUA API DE IA PARA GERAR MÚSICA
+        // (Este é um exemplo, você precisa de adaptar para a sua API)
         // ===================================================================
+        /*
+        const responseDaIA = await fetch('URL_DA_SUA_API_DE_MUSICA', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer SUA_CHAVE_DE_API_AQUI`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                prompt: descricao,
+                duration_seconds: 30 // exemplo
+            })
+        });
 
-        // Exemplo de resposta (substitua pelo ficheiro real quando tiver a lógica)
-        console.log("Música gerada com sucesso (simulação).");
-        // Para testar, pode enviar um ficheiro de áudio de exemplo que você tenha
-        // const dummyAudioPath = path.join(__dirname, 'caminho/para/musica_exemplo.mp3');
-        // res.sendFile(dummyAudioPath);
-        res.status(501).send("Lógica de geração de música ainda não implementada no backend.");
+        if (!responseDaIA.ok) {
+            throw new Error(`A API de música retornou um erro: ${await responseDaIA.text()}`);
+        }
+
+        // Supondo que a API devolve o ficheiro de áudio diretamente
+        const audioBuffer = await responseDaIA.buffer(); // ou .blob() dependendo da API
+
+        const outputPath = path.join(processedDir, `musica-${Date.now()}.mp3`);
+        fs.writeFileSync(outputPath, audioBuffer);
+        allTempFiles.push(outputPath);
+        */
+       
+        // --- INÍCIO: CÓDIGO DE SIMULAÇÃO (apague quando a sua API estiver integrada) ---
+        // Para testar, vamos criar um ficheiro de áudio de exemplo.
+        // Você precisa de ter um ficheiro chamado 'exemplo.mp3' na sua pasta 'uploads'.
+        const exemploPath = path.join(uploadDir, 'exemplo.mp3');
+        if (!fs.existsSync(exemploPath)) {
+            throw new Error("Ficheiro de exemplo 'exemplo.mp3' não encontrado na pasta 'uploads' para simulação.");
+        }
+        const outputPath = path.join(processedDir, `musica-simulada-${Date.now()}.mp3`);
+        fs.copyFileSync(exemploPath, outputPath);
+        allTempFiles.push(outputPath);
+        // --- FIM: CÓDIGO DE SIMULAÇÃO ---
+
+
+        console.log(`Música gerada e salva em: ${outputPath}`);
+
+        // Envia o ficheiro de música de volta para o utilizador
+        res.sendFile(outputPath, (err) => {
+            if (err) {
+                console.error('Erro ao enviar o ficheiro de música:', err);
+            }
+            // A limpeza dos ficheiros temporários será feita pela função 'safeDeleteFiles'
+            // que já está no seu código, mas precisamos de garantir que ela seja chamada.
+            // A função 'sendZipResponse' já faz isso, mas aqui estamos a enviar um único ficheiro.
+            // Vamos adicionar a limpeza aqui também.
+            safeDeleteFiles(allTempFiles);
+        });
 
     } catch (error) {
         console.error('Erro ao gerar música:', error);
-        res.status(500).send('Erro interno ao gerar a música.');
+        safeDeleteFiles(allTempFiles); // Garante a limpeza em caso de erro
+        if (!res.headersSent) {
+            res.status(500).send(`Erro interno ao gerar a música: ${error.message}`);
+        }
     }
 });
 
@@ -708,5 +753,6 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
