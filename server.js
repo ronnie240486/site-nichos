@@ -379,6 +379,76 @@ app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
     }
 });
 
+// --- INÍCIO DO CÓDIGO ADICIONADO ---
+
+app.post('/gerar-musica', upload.none(), async (req, res) => {
+    // O 'upload.none()' é usado porque esta rota não espera ficheiros, apenas texto.
+    try {
+        const { descricao } = req.body; // Pega a descrição enviada pelo frontend
+        if (!descricao) {
+            return res.status(400).send('A descrição da música é obrigatória.');
+        }
+
+        console.log(`Pedido para gerar música com a descrição: "${descricao}"`);
+
+        // ===================================================================
+        // AQUI VAI A SUA LÓGICA DE IA PARA GERAR MÚSICA
+        // 1. Chame a sua API de geração de música (ex: Suno, MusicFX, etc.)
+        // 2. Receba o ficheiro de áudio da API.
+        // ===================================================================
+
+        // Exemplo de resposta (substitua pelo ficheiro real quando tiver a lógica)
+        console.log("Música gerada com sucesso (simulação).");
+        // Para testar, pode enviar um ficheiro de áudio de exemplo que você tenha
+        // const dummyAudioPath = path.join(__dirname, 'caminho/para/musica_exemplo.mp3');
+        // res.sendFile(dummyAudioPath);
+        res.status(501).send("Lógica de geração de música ainda não implementada no backend.");
+
+    } catch (error) {
+        console.error('Erro ao gerar música:', error);
+        res.status(500).send('Erro interno ao gerar a música.');
+    }
+});
+
+app.post('/separar-faixas', upload.array('videos'), async (req, res) => {
+    // Usamos 'upload.array('videos')' para manter a consistência com as outras rotas
+    const files = req.files || [];
+    if (files.length === 0) {
+        return res.status(400).send('Nenhum ficheiro de áudio enviado.');
+    }
+
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const processedFiles = [];
+        for (const file of files) {
+            console.log(`Processando separação de faixas para: ${file.filename}`);
+
+            // ===================================================================
+            // AQUI VAI A SUA LÓGICA DE IA PARA SEPARAR AS FAIXAS
+            // 1. Use uma ferramenta como Spleeter ou Demucs.
+            // 2. Processe o ficheiro de áudio salvo em 'file.path'.
+            // 3. O resultado serão vários ficheiros (vocais.mp3, instrumental.mp3, etc.).
+            // 4. Adicione os caminhos desses ficheiros a 'processedFiles'.
+            // Ex: processedFiles.push({ path: 'caminho/para/vocais.mp3', name: 'vocais.mp3' });
+            // ===================================================================
+        }
+
+        // Exemplo de resposta (substitua pela lógica real)
+        console.log("Faixas separadas com sucesso (simulação).");
+        // Quando a lógica estiver pronta, use sendZipResponse para enviar os ficheiros separados
+        // sendZipResponse(res, processedFiles, allTempFiles);
+        safeDeleteFiles(allTempFiles);
+        res.status(501).send("Lógica de separação de faixas ainda não implementada no backend.");
+
+    } catch (error) {
+        console.error('Erro ao separar faixas:', error);
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send('Erro interno ao separar as faixas.');
+    }
+});
+
+// --- FIM DO CÓDIGO ADICIONADO ---
+
 
 // --- ROTAS DO IA TURBO ---
 
@@ -638,3 +708,4 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
