@@ -380,76 +380,87 @@ app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
     }
 });
 
-// ROTA CORRIGIDA E FUNCIONAL (EXEMPLO)
+// ROTA REAL PARA GERAR MÚSICA COM REPLICATE (ASSÍNCRONA)
 app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
+    // Limpa ficheiros de upload que não são usados nesta rota
     const allTempFiles = (req.files || []).map(f => f.path);
+    
     try {
         const { descricao } = req.body;
+        // Pega a chave da API que o frontend envia no cabeçalho
+        const replicateApiKey = req.headers['x-replicate-api-key']; 
+
         if (!descricao) {
             return res.status(400).send('A descrição da música é obrigatória.');
+        }
+        if (!replicateApiKey) {
+            return res.status(400).send('A chave da API da Replicate não foi fornecida.');
         }
 
         console.log(`Iniciando geração de música para: "${descricao}"`);
 
-        // ===================================================================
-        // ETAPA 1: CHAMAR A SUA API DE IA PARA GERAR MÚSICA
-        // (Este é um exemplo, você precisa de adaptar para a sua API)
-        // ===================================================================
-        /*
-        const responseDaIA = await fetch('URL_DA_SUA_API_DE_MUSICA', {
-            method: 'POST',
+        // Etapa 1: Iniciar a predição na Replicate
+        const startResponse = await fetch("https://api.replicate.com/v1/predictions", {
+            method: "POST",
             headers: {
-                'Authorization': `Bearer SUA_CHAVE_DE_API_AQUI`,
-                'Content-Type': 'application/json'
+                "Authorization": `Token ${replicateApiKey}`,
+                "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                prompt: descricao,
-                duration_seconds: 30 // exemplo
-            })
+                // Versão do modelo MusicGen da Meta
+                version: "8cf61ea6c56afd61d8f5b9ffd14d7c216c0a93844ce2d82ac1c9ecc9c7f24e05", 
+                input: {
+                    model_version: "stereo-large",
+                    prompt: descricao,
+                    duration: 10 // Duração em segundos (pode ajustar)
+                },
+            }),
         });
 
-        if (!responseDaIA.ok) {
-            throw new Error(`A API de música retornou um erro: ${await responseDaIA.text()}`);
+        const prediction = await startResponse.json();
+        if (startResponse.status !== 201) {
+            throw new Error(prediction.detail || "Falha ao iniciar a geração na Replicate.");
         }
 
-        // Supondo que a API devolve o ficheiro de áudio diretamente
-        const audioBuffer = await responseDaIA.buffer(); // ou .blob() dependendo da API
+        let predictionUrl = prediction.urls.get;
+        let generatedMusicUrl = null;
 
-        const outputPath = path.join(processedDir, `musica-${Date.now()}.mp3`);
-        fs.writeFileSync(outputPath, audioBuffer);
-        allTempFiles.push(outputPath);
-        */
-       
-        // --- INÍCIO: CÓDIGO DE SIMULAÇÃO (apague quando a sua API estiver integrada) ---
-        // Para testar, vamos criar um ficheiro de áudio de exemplo.
-        // Você precisa de ter um ficheiro chamado 'exemplo.mp3' na sua pasta 'uploads'.
-        const exemploPath = path.join(uploadDir, 'exemplo.mp3');
-        if (!fs.existsSync(exemploPath)) {
-            throw new Error("Ficheiro de exemplo 'exemplo.mp3' não encontrado na pasta 'uploads' para simulação.");
-        }
-        const outputPath = path.join(processedDir, `musica-simulada-${Date.now()}.mp3`);
-        fs.copyFileSync(exemploPath, outputPath);
-        allTempFiles.push(outputPath);
-        // --- FIM: CÓDIGO DE SIMULAÇÃO ---
+        // Etapa 2: Verificar o estado da predição até estar concluída
+        while (!generatedMusicUrl) {
+            console.log("A verificar o estado da geração...");
+            // Espera 3 segundos entre cada verificação para não sobrecarregar a API
+            await new Promise(resolve => setTimeout(resolve, 3000)); 
 
+            const statusResponse = await fetch(predictionUrl, {
+                headers: { "Authorization": `Token ${replicateApiKey}` },
+            });
+            const statusResult = await statusResponse.json();
 
-        console.log(`Música gerada e salva em: ${outputPath}`);
-
-        // Envia o ficheiro de música de volta para o utilizador
-        res.sendFile(outputPath, (err) => {
-            if (err) {
-                console.error('Erro ao enviar o ficheiro de música:', err);
+            if (statusResult.status === "succeeded") {
+                generatedMusicUrl = statusResult.output;
+                break;
+            } else if (statusResult.status === "failed") {
+                throw new Error("A geração da música falhou na Replicate.");
             }
-            // A limpeza dos ficheiros temporários será feita pela função 'safeDeleteFiles'
-            // que já está no seu código, mas precisamos de garantir que ela seja chamada.
-            // A função 'sendZipResponse' já faz isso, mas aqui estamos a enviar um único ficheiro.
-            // Vamos adicionar a limpeza aqui também.
-            safeDeleteFiles(allTempFiles);
-        });
+            // Se ainda estiver "starting" ou "processing", o loop continua
+        }
+
+        console.log("Música gerada com sucesso:", generatedMusicUrl);
+
+        // Etapa 3: Fazer o download da música gerada e enviá-la ao utilizador
+        const musicResponse = await fetch(generatedMusicUrl);
+        if (!musicResponse.ok) {
+            throw new Error("Falha ao fazer o download da música gerada.");
+        }
+
+        // Envia o áudio diretamente para o navegador do utilizador
+        res.setHeader('Content-Type', 'audio/mpeg');
+        musicResponse.body.pipe(res);
 
     } catch (error) {
         console.error('Erro ao gerar música:', error);
-        safeDeleteFiles(allTempFiles); // Garante a limpeza em caso de erro
+        // Garante que os ficheiros temporários são limpos em caso de erro
+        safeDeleteFiles(allTempFiles);
         if (!res.headersSent) {
             res.status(500).send(`Erro interno ao gerar a música: ${error.message}`);
         }
@@ -832,6 +843,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
