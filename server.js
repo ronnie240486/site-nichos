@@ -585,7 +585,7 @@ app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     }
 });
 
-// ROTA PARA INPAINTING (PREENCHIMENTO MÁGICO)
+// ROTA PARA INPAINTING (COM O MODELO CORRIGIDO)
 app.post('/inpainting', upload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'mask', maxCount: 1 }
@@ -604,7 +604,7 @@ app.post('/inpainting', upload.fields([
         const stabilityApiKey = process.env.STABILITY_API_KEY || req.headers['x-stability-api-key'];
         if (!stabilityApiKey) throw new Error("A chave da API da Stability AI não está configurada.");
 
-        console.log("Iniciando processo de Inpainting...");
+        console.log("Iniciando processo de Inpainting com o modelo mais recente...");
 
         const formData = new FormData();
         formData.append('init_image', fs.createReadStream(imageFile.path));
@@ -615,8 +615,10 @@ app.post('/inpainting', upload.fields([
         formData.append('samples', 1);
         formData.append('steps', 30);
 
+        // --- ALTERAÇÃO PRINCIPAL AQUI ---
+        // Trocámos 'stable-diffusion-v1-6' por um modelo mais recente e poderoso.
         const response = await fetch(
-            "https://api.stability.ai/v1/generation/stable-diffusion-v1-6/image-to-image/masking",
+            "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/image-to-image/masking",
             {
                 method: 'POST',
                 headers: { ...formData.getHeaders(), 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` },
@@ -645,7 +647,6 @@ app.post('/inpainting', upload.fields([
         if (!res.headersSent) res.status(500).send(`Erro interno no Inpainting: ${error.message}`);
     }
 });
-
 
 // --- ROTAS DO IA TURBO ---
 
@@ -905,6 +906,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
