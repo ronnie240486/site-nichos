@@ -162,6 +162,32 @@ function getEffectFilter(effectName, durationPerImage, dValue, videoWidth, video
             return `zoompan=z='min(zoom+0.0015,1.5)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${videoWidth}x${videoHeight}`;
     }
 }
+function pcmToWavBuffer(pcmData, sampleRate) {
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const blockAlign = (numChannels * bitsPerSample) / 8;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = pcmData.length;
+    
+    const buffer = Buffer.alloc(44 + dataSize);
+    
+    buffer.write('RIFF', 0);
+    buffer.writeUInt32LE(36 + dataSize, 4);
+    buffer.write('WAVE', 8);
+    buffer.write('fmt ', 12);
+    buffer.writeUInt32LE(16, 16); // Subchunk1Size for PCM
+    buffer.writeUInt16LE(1, 20); // AudioFormat (1 for PCM)
+    buffer.writeUInt16LE(numChannels, 22);
+    buffer.writeUInt32LE(sampleRate, 24);
+    buffer.writeUInt32LE(byteRate, 28);
+    buffer.writeUInt16LE(blockAlign, 32);
+    buffer.writeUInt16LE(bitsPerSample, 34);
+    buffer.write('data', 36);
+    buffer.writeUInt32LE(dataSize, 40);
+    pcmData.copy(buffer, 44);
+    
+    return buffer;
+}
 
 // 5. Rotas
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
@@ -1254,6 +1280,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
