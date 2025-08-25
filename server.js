@@ -585,6 +585,74 @@ app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     }
 });
 
+// --- ROTA PARA CLONAGEM DE VOZ (ELEVENLABS) ---
+app.post('/clonar-voz', upload.single('audio'), async (req, res) => {
+    const audioFile = req.file;
+    const { text } = req.body;
+    const allTempFiles = [audioFile?.path].filter(Boolean);
+
+    if (!audioFile || !text) {
+        safeDeleteFiles(allTempFiles);
+        return res.status(400).send('Faltam a amostra de áudio ou o texto.');
+    }
+
+    try {
+        const elevenlabsApiKey = process.env.ELEVENLABS_API_KEY || req.headers['x-elevenlabs-api-key'];
+        if (!elevenlabsApiKey) {
+            throw new Error("A chave da API da ElevenLabs não está configurada.");
+        }
+
+        console.log("Iniciando processo de clonagem de voz...");
+
+        // Etapa 1: Adicionar a voz à sua conta ElevenLabs
+        const formData = new FormData();
+        formData.append('name', `VozClonada_${Date.now()}`);
+        formData.append('files', fs.createReadStream(audioFile.path), audioFile.originalname);
+
+        const addVoiceResponse = await fetch("https://api.elevenlabs.io/v1/voices/add", {
+            method: 'POST',
+            headers: { 'xi-api-key': elevenlabsApiKey },
+            body: formData,
+        });
+
+        if (!addVoiceResponse.ok) throw new Error(`API da ElevenLabs (Add Voice) retornou um erro: ${await addVoiceResponse.text()}`);
+        const { voice_id } = await addVoiceResponse.json();
+        console.log("Voz temporária criada com ID:", voice_id);
+
+        // Etapa 2: Gerar o áudio com a nova voz
+        const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice_id}/stream`, {
+            method: 'POST',
+            headers: { 'xi-api-key': elevenlabsApiKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                text: text,
+                model_id: "eleven_multilingual_v2",
+                voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+            }),
+        });
+
+        if (!ttsResponse.ok) throw new Error(`API da ElevenLabs (TTS) retornou um erro: ${await ttsResponse.text()}`);
+
+        // Etapa 3: Enviar o áudio de volta e apagar a voz temporária
+        res.setHeader('Content-Type', 'audio/mpeg');
+        ttsResponse.body.pipe(res);
+
+        // Apaga a voz clonada após o envio para não encher a sua conta
+        res.on('finish', async () => {
+            console.log("A apagar a voz temporária:", voice_id);
+            await fetch(`https://api.elevenlabs.io/v1/voices/${voice_id}`, {
+                method: 'DELETE',
+                headers: { 'xi-api-key': elevenlabsApiKey }
+            });
+            safeDeleteFiles(allTempFiles);
+        });
+
+    } catch (error) {
+        console.error('Erro no processo de clonagem de voz:', error);
+        safeDeleteFiles(allTempFiles);
+        if (!res.headersSent) res.status(500).send(`Erro interno na clonagem de voz: ${error.message}`);
+    }
+});
+
 // ROTA PARA INPAINTING (VOLTANDO AO MODELO XL QUE SABEMOS QUE EXISTE)
 app.post('/inpainting', upload.fields([
     { name: 'image', maxCount: 1 },
@@ -1005,6 +1073,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
