@@ -831,6 +831,63 @@ app.post('/workflow-magico', upload.none(), async (req, res) => {
         if (!scenesText) throw new Error("A IA não conseguiu gerar a lista de cenas.");
         const scenes = JSON.parse(scenesText);
 
+        // Etapa 4: Buscar e Baixar Mídias
+        console.log("[Workflow] Etapa 4/5: A buscar e baixar mídias em paralelo...");
+        const downloadPromises = scenes.map(async (scene) => {
+            const pexelsResponse = await fetch(`https://api.pexels.com/videos/search?query=${encodeURIComponent(scene.termo_busca)}&per_page=1&orientation=landscape`, {
+                headers: { 'Authorization': pexelsApiKey }
+            });
+            const pexelsData = await pexelsResponse.json();
+            if (pexelsData.videos && pexelsData.videos.length > 0) {
+                const videoUrl = pexelsData.videos[0].video_files.find(f => f.quality === 'hd')?.link;
+                if (videoUrl) {
+                    const videoPath = path.join(uploadDir, `scene-${scene.cena}-${Date.now()}.mp4`);
+                    const videoRes = await fetch(videoUrl);
+                    const fileStream = fs.createWriteStream(videoPath);
+                    await new Promise((resolve, reject) => {
+                        videoRes.body.pipe(fileStream);
+                        videoRes.body.on("error", reject);
+                        fileStream.on("finish", resolve);
+                    });
+                    return videoPath;
+                }
+            }
+            return null;
+        });
+        const mediaPaths = (await Promise.all(downloadPromises)).filter(Boolean);
+        allTempFiles.push(...mediaPaths);
+        if (mediaPaths.length === 0) throw new Error("Nenhuma mídia de vídeo pôde ser encontrada para o roteiro.");
+
+        // Etapa 5: Montar o Vídeo Final
+        console.log("[Workflow] Etapa 5/5: A montar o vídeo final...");
+        const fileListPath = path.join(uploadDir, `filelist-${Date.now()}.txt`);
+        const fileContent = mediaPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
+        fs.writeFileSync(fileListPath, fileContent);
+        allTempFiles.push(fileListPath);
+
+        const silentVideoPath = path.join(processedDir, `silent-${Date.now()}.mp4`);
+        allTempFiles.push(silentVideoPath);
+        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=30" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y "${silentVideoPath}"`);
+
+        const finalVideoPath = path.join(processedDir, `final-video-${Date.now()}.mp4`);
+        allTempFiles.push(finalVideoPath);
+        await runFFmpeg(`ffmpeg -i "${silentVideoPath}" -i "${narrationPath}" -c:v copy -c:a aac -map 0:v:0 -map 1:a:0 -shortest -y "${finalVideoPath}"`);
+
+        console.log("[Workflow] Concluído! A enviar vídeo.");
+        res.sendFile(finalVideoPath, (err) => {
+            if (err) console.error('Erro ao enviar o vídeo final:', err);
+            safeDeleteFiles(allTempFiles);
+        });
+
+    } catch (error) {
+        console.error('Erro no Workflow Mágico:', error);
+        safeDeleteFiles(allTempFiles);
+        if (!res.headersSent) {
+            res.status(500).send(`Erro interno no Workflow Mágico: ${error.message}`);
+        }
+    }
+});
+
 // --- ROTA PARA GERADOR DE LOGOTIPOS (IA) - COM MODELO CORRIGIDO ---
 app.post('/gerar-logo', upload.none(), async (req, res) => {
     const { prompt } = req.body;
@@ -1154,6 +1211,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
