@@ -643,7 +643,6 @@ app.post('/inpainting', upload.fields([
         formData.append('init_image', fs.createReadStream(resizedImagePath));
         formData.append('mask_image', fs.createReadStream(resizedMaskPath));
         formData.append('text_prompts[0][text]', prompt);
-        const formData = new FormData();
         formData.append('mask_source', 'MASK_IMAGE_WHITE'); // <-- ADICIONE ESTA LINHA AQUI**
         formData.append('text_prompts[0][text]', prompt);
         formData.append('cfg_scale', 7);
@@ -938,6 +937,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
