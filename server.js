@@ -643,7 +643,7 @@ app.post('/inpainting', upload.fields([
         formData.append('init_image', fs.createReadStream(resizedImagePath));
         formData.append('mask_image', fs.createReadStream(resizedMaskPath));
         formData.append('text_prompts[0][text]', prompt);
-        formData.append('output_format', 'png');
+    
 
         const response = await fetch(
             "https://api.stability.ai/v1/generation/stable-inpainting-xl-1.0/image-to-image/masking",
@@ -932,6 +932,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
