@@ -653,6 +653,69 @@ app.post('/clonar-voz', upload.single('audio'), async (req, res) => {
     }
 });
 
+// --- ROTA PARA GERADOR DE EFEITOS SONOROS (REPLICATE) ---
+app.post('/gerar-sfx', upload.none(), async (req, res) => {
+    const { prompt } = req.body;
+    if (!prompt) {
+        return res.status(400).send('A descrição do efeito sonoro é obrigatória.');
+    }
+
+    try {
+        const replicateApiKey = req.headers['x-replicate-api-key'];
+        if (!replicateApiKey) {
+            throw new Error("A chave da API da Replicate não foi fornecida.");
+        }
+
+        console.log(`Iniciando geração de SFX para: "${prompt}"`);
+
+        // Etapa 1: Iniciar a predição na Replicate
+        const startResponse = await fetch("https://api.replicate.com/v1/predictions", {
+            method: "POST",
+            headers: { "Authorization": `Token ${replicateApiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+                version: "b05b1dff1d8c6ac63d424224fe93a2e79c5689a8b653e7a41da33e5737e4558e", // Modelo AudioGen
+                input: {
+                    text: prompt,
+                    duration: 5 // Duração em segundos
+                },
+            }),
+        });
+
+        const prediction = await startResponse.json();
+        if (startResponse.status !== 201) throw new Error(prediction.detail || "Falha ao iniciar a geração na Replicate.");
+
+        let predictionUrl = prediction.urls.get;
+        let generatedSfxUrl = null;
+
+        // Etapa 2: Verificar o estado da predição
+        while (!generatedSfxUrl) {
+            console.log("A verificar o estado da geração de SFX...");
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            const statusResponse = await fetch(predictionUrl, { headers: { "Authorization": `Token ${replicateApiKey}` } });
+            const statusResult = await statusResponse.json();
+            if (statusResult.status === "succeeded") {
+                generatedSfxUrl = statusResult.output;
+                break;
+            } else if (statusResult.status === "failed") {
+                throw new Error("A geração do SFX falhou na Replicate.");
+            }
+        }
+
+        console.log("SFX gerado com sucesso:", generatedSfxUrl);
+
+        // Etapa 3: Fazer o download e enviar ao utilizador
+        const sfxResponse = await fetch(generatedSfxUrl);
+        if (!sfxResponse.ok) throw new Error("Falha ao fazer o download do SFX gerado.");
+
+        res.setHeader('Content-Type', 'audio/wav');
+        sfxResponse.body.pipe(res);
+
+    } catch (error) {
+        console.error('Erro ao gerar SFX:', error);
+        if (!res.headersSent) res.status(500).send(`Erro interno ao gerar SFX: ${error.message}`);
+    }
+});
+
 // ROTA PARA INPAINTING (VOLTANDO AO MODELO XL QUE SABEMOS QUE EXISTE)
 app.post('/inpainting', upload.fields([
     { name: 'image', maxCount: 1 },
@@ -1073,6 +1136,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
