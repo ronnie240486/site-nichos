@@ -642,7 +642,7 @@ app.post('/inpainting', upload.fields([
         const formData = new FormData();
         formData.append('init_image', fs.createReadStream(resizedImagePath));
         formData.append('mask_image', fs.createReadStream(resizedMaskPath));
-        formData.append('prompt', prompt);
+        formData.append('text_prompts[0][text]', prompt);
         formData.append('output_format', 'png');
 
         const response = await fetch(
@@ -932,6 +932,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
