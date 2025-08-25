@@ -716,7 +716,7 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO COMPLETA) ---
+// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO CORRIGIDA) ---
 app.post('/workflow-magico', upload.none(), async (req, res) => {
     const { topic } = req.body;
     let allTempFiles = [];
@@ -726,16 +726,18 @@ app.post('/workflow-magico', upload.none(), async (req, res) => {
     }
 
     try {
-        const geminiApiKey = process.env.GEMINI_API_KEY || req.headers['x-gemini-api-key'];
-        const pexelsApiKey = process.env.PEXELS_API_KEY || req.headers['x-pexels-api-key'];
+        // Pega as chaves dos headers da requisição
+        const geminiApiKey = req.headers['x-gemini-api-key'];
+        const pexelsApiKey = req.headers['x-pexels-api-key'];
+        const openaiApiKey = req.headers['x-openai-api-key']; // Chave para a narração
 
-        if (!geminiApiKey || !pexelsApiKey) {
-            throw new Error("As chaves de API do Gemini e da Pexels são necessárias.");
+        if (!geminiApiKey || !pexelsApiKey || !openaiApiKey) {
+            throw new Error("As chaves de API do Gemini, Pexels e OpenAI são necessárias.");
         }
 
         console.log(`[Workflow] Iniciado para o tópico: "${topic}"`);
 
-        // Etapa 1: Gerar Roteiro
+        // Etapa 1: Gerar Roteiro (com Gemini)
         console.log("[Workflow] Etapa 1/5: A gerar roteiro...");
         const scriptPrompt = `Crie um roteiro para um vídeo curto (40-60 segundos) sobre "${topic}". O roteiro deve ser envolvente, informativo e dividido em frases curtas. Responda APENAS com o texto do roteiro.`;
         const scriptResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
@@ -751,20 +753,20 @@ app.post('/workflow-magico', upload.none(), async (req, res) => {
         fs.writeFileSync(scriptPath, script);
         allTempFiles.push(scriptPath);
 
-        // Etapa 2: Gerar Narração
+        // Etapa 2: Gerar Narração (com OpenAI para mais opções de voz)
         console.log("[Workflow] Etapa 2/5: A gerar narração...");
         const narrationResponse = await fetch(`https://api.openai.com/v1/audio/speech`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${localStorage.getItem('darkmaker_api_openai')}`, 'Content-Type': 'application/json' },
+            headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ model: 'tts-1', voice: 'alloy', input: script })
         });
-        if (!narrationResponse.ok) throw new Error("Falha ao gerar a narração.");
+        if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
         const narrationBuffer = await narrationResponse.buffer();
         const narrationPath = path.join(uploadDir, `narration-${Date.now()}.mp3`);
         fs.writeFileSync(narrationPath, narrationBuffer);
         allTempFiles.push(narrationPath);
 
-        // Etapa 3: Analisar Roteiro para Cenas
+        // Etapa 3: Analisar Roteiro para Cenas (com Gemini)
         console.log("[Workflow] Etapa 3/5: A analisar cenas...");
         const scenesPrompt = `Analise este roteiro e divida-o em 5 a 8 cenas visuais. Para cada cena, forneça um termo de busca conciso e em inglês para encontrar um vídeo de stock. Retorne um array de objetos JSON. Exemplo: [{"cena": 1, "termo_busca": "person meditating peacefully"}, ...]. Roteiro: "${script}"`;
         const scenesResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
@@ -776,7 +778,7 @@ app.post('/workflow-magico', upload.none(), async (req, res) => {
         const scenesData = await scenesResponse.json();
         const scenes = JSON.parse(scenesData.candidates[0].content.parts[0].text);
 
-        // Etapa 4: Buscar e Baixar Mídias
+        // Etapa 4: Buscar e Baixar Mídias (com Pexels)
         console.log("[Workflow] Etapa 4/5: A buscar e baixar mídias...");
         const mediaPaths = [];
         for (const scene of scenes) {
@@ -802,7 +804,7 @@ app.post('/workflow-magico', upload.none(), async (req, res) => {
         }
         if (mediaPaths.length === 0) throw new Error("Nenhuma mídia de vídeo pôde ser encontrada para o roteiro.");
 
-        // Etapa 5: Montar o Vídeo Final
+        // Etapa 5: Montar o Vídeo Final (com FFmpeg)
         console.log("[Workflow] Etapa 5/5: A montar o vídeo final...");
         const fileListPath = path.join(uploadDir, `filelist-${Date.now()}.txt`);
         const fileContent = mediaPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
@@ -1252,6 +1254,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
