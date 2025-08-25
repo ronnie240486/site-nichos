@@ -682,7 +682,7 @@ app.post('/inpainting', upload.fields([
     }
 });
 
-// --- ROTA PARA GERADOR DE LOGOTIPOS (IA) ---
+// --- ROTA PARA GERADOR DE LOGOTIPOS (IA) - CORRIGIDA ---
 app.post('/gerar-logo', upload.none(), async (req, res) => {
     const { prompt } = req.body;
 
@@ -691,8 +691,6 @@ app.post('/gerar-logo', upload.none(), async (req, res) => {
     }
 
     try {
-        // Para logotipos, a API da Stability AI é uma excelente opção.
-        // Vamos usar a mesma chave da ferramenta de Inpainting.
         const stabilityApiKey = process.env.STABILITY_API_KEY || req.headers['x-stability-api-key'];
         if (!stabilityApiKey) {
             throw new Error("A chave da API da Stability AI não está configurada.");
@@ -700,26 +698,32 @@ app.post('/gerar-logo', upload.none(), async (req, res) => {
 
         console.log("Iniciando geração de logotipos com o prompt:", prompt);
 
-        const formData = new FormData();
-        // Adicionamos termos ao prompt para focar em design de logotipo
-        formData.append('text_prompts[0][text]', `${prompt}, professional logo, vector, minimalist, flat design`);
-        formData.append('cfg_scale', 7);
-        formData.append('samples', 4); // Gerar 4 opções de uma vez
-        formData.append('steps', 30);
-        formData.append('width', 1024); // Logotipos geralmente são quadrados
-        formData.append('height', 1024);
+        // CORREÇÃO: Construir um objeto JSON em vez de FormData
+        const payload = {
+            text_prompts: [
+                {
+                    text: `${prompt}, professional logo, vector, minimalist, flat design`
+                }
+            ],
+            cfg_scale: 7,
+            samples: 4,
+            steps: 30,
+            width: 1024,
+            height: 1024,
+        };
 
-        // Usamos um modelo mais recente, ideal para este tipo de tarefa
         const response = await fetch(
             "https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image",
             {
                 method: 'POST',
                 headers: {
-                    ...formData.getHeaders(),
+                    // CORREÇÃO: Definir o Content-Type para application/json
+                    'Content-Type': 'application/json',
                     'Accept': 'application/json',
                     'Authorization': `Bearer ${stabilityApiKey}`
                 },
-                body: formData,
+                // CORREÇÃO: Enviar o payload como uma string JSON
+                body: JSON.stringify(payload),
             }
         );
 
@@ -729,76 +733,11 @@ app.post('/gerar-logo', upload.none(), async (req, res) => {
 
         const responseJSON = await response.json();
         
-        // Extrai as imagens da resposta
         const images = responseJSON.artifacts.map(image => ({
             base64: image.base64
         }));
 
         console.log(`${images.length} logotipos gerados com sucesso.`);
-        // Envia as imagens de volta para o frontend como um objeto JSON
-        res.json({ images });
-
-    } catch (error) {
-        console.error('Erro no processo de geração de logotipos:', error);
-        if (!res.headersSent) {
-            res.status(500).send(`Erro interno na geração de logotipos: ${error.message}`);
-        }
-    }
-});
-
-// --- ROTA PARA GERADOR DE LOGOTIPOS (IA) ---
-app.post('/gerar-logo', upload.none(), async (req, res) => {
-    const { prompt } = req.body;
-
-    if (!prompt) {
-        return res.status(400).send('A descrição do logotipo é obrigatória.');
-    }
-
-    try {
-        // Usamos a chave da Stability AI, a mesma da ferramenta de Inpainting.
-        const stabilityApiKey = process.env.STABILITY_API_KEY || req.headers['x-stability-api-key'];
-        if (!stabilityApiKey) {
-            throw new Error("A chave da API da Stability AI não está configurada.");
-        }
-
-        console.log("Iniciando geração de logotipos com o prompt:", prompt);
-
-        const formData = new FormData();
-        // Adicionamos termos ao prompt para focar em design de logotipo
-        formData.append('text_prompts[0][text]', `${prompt}, professional logo, vector, minimalist, flat design`);
-        formData.append('cfg_scale', 7);
-        formData.append('samples', 4); // Gerar 4 opções de uma vez
-        formData.append('steps', 30);
-        formData.append('width', 1024); // Logotipos geralmente são quadrados
-        formData.append('height', 1024);
-
-        // Usamos um modelo mais recente, ideal para este tipo de tarefa
-        const response = await fetch(
-            "https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image",
-            {
-                method: 'POST',
-                headers: {
-                    ...formData.getHeaders(),
-                    'Accept': 'application/json',
-                    'Authorization': `Bearer ${stabilityApiKey}`
-                },
-                body: formData,
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`);
-        }
-
-        const responseJSON = await response.json();
-        
-        // Extrai as imagens da resposta
-        const images = responseJSON.artifacts.map(image => ({
-            base64: image.base64
-        }));
-
-        console.log(`${images.length} logotipos gerados com sucesso.`);
-        // Envia as imagens de volta para o frontend como um objeto JSON
         res.json({ images });
 
     } catch (error) {
@@ -1067,6 +1006,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
