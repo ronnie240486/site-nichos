@@ -716,6 +716,67 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
+// --- ROTA PARA WORKFLOW MÁGICO ---
+app.post('/workflow-magico', upload.none(), async (req, res) => {
+    const { topic } = req.body;
+    if (!topic) {
+        return res.status(400).send('O tópico do vídeo é obrigatório.');
+    }
+
+    try {
+        const geminiApiKey = process.env.GEMINI_API_KEY || req.headers['x-gemini-api-key'];
+        if (!geminiApiKey) throw new Error("A chave da API do Gemini não está configurada.");
+
+        console.log(`[Workflow] Iniciado para o tópico: "${topic}"`);
+
+        // Etapa 1: Gerar Roteiro
+        console.log("[Workflow] A gerar roteiro...");
+        const scriptPrompt = `Crie um roteiro para um vídeo curto (aproximadamente 1 minuto) sobre "${topic}". O roteiro deve ser envolvente e informativo. Responda APENAS com o texto do roteiro.`;
+        const scriptResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: scriptPrompt }] }] })
+        });
+        if (!scriptResponse.ok) throw new Error("Falha ao gerar o roteiro.");
+        const scriptData = await scriptResponse.json();
+        const script = scriptData.candidates[0].content.parts[0].text;
+
+        // Etapa 2: Gerar Narração (usando uma voz Gemini como exemplo)
+        console.log("[Workflow] A gerar narração...");
+        const narrationPrompt = `Diga com uma voz calma e informativa: ${script}`;
+        const narrationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiApiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: "gemini-2.5-flash-preview-tts",
+                contents: [{ parts: [{ text: narrationPrompt }] }],
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Iapetus' } } }
+                }
+            })
+        });
+        if (!narrationResponse.ok) throw new Error("Falha ao gerar a narração.");
+        const narrationData = await narrationResponse.json();
+        const audioBase64 = narrationData.candidates[0].content.parts[0].inlineData.data;
+
+        // AQUI VIRIAM AS ETAPAS DE BUSCA DE MÍDIA E MONTAGEM COM FFMPEG
+
+        // Por agora, vamos devolver o roteiro e o áudio para mostrar que funciona
+        res.json({
+            message: "Workflow parcialmente concluído!",
+            script: script,
+            audioBase64: audioBase64
+        });
+
+    } catch (error) {
+        console.error('Erro no Workflow Mágico:', error);
+        if (!res.headersSent) {
+            res.status(500).send(`Erro interno no Workflow Mágico: ${error.message}`);
+        }
+    }
+});
+
 // ROTA PARA INPAINTING (VOLTANDO AO MODELO XL QUE SABEMOS QUE EXISTE)
 app.post('/inpainting', upload.fields([
     { name: 'image', maxCount: 1 },
@@ -1136,6 +1197,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
