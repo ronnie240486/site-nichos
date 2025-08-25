@@ -585,7 +585,7 @@ app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     }
 });
 
-// ROTA PARA INPAINTING (COM MODELO ESPECIALIZADO E REDIMENSIONAMENTO)
+// ROTA PARA INPAINTING (COM O MODELO MAIS RECENTE)
 app.post('/inpainting', upload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'mask', maxCount: 1 }
@@ -604,14 +604,14 @@ app.post('/inpainting', upload.fields([
         const stabilityApiKey = process.env.STABILITY_API_KEY || req.headers['x-stability-api-key'];
         if (!stabilityApiKey) throw new Error("A chave da API da Stability AI não está configurada.");
 
-        console.log("Iniciando processo de Inpainting com modelo especializado...");
-        
+        console.log("Iniciando processo de Inpainting com o modelo mais recente...");
+
+        // Lógica de redimensionamento (mantida para evitar erros de dimensão)
         const ffprobeCommand = `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "${imageFile.path}"`;
         const dimensions = await new Promise((resolve, reject) => {
             exec(ffprobeCommand, (err, stdout) => err ? reject(err) : resolve(stdout.trim()));
         });
         const [originalWidth, originalHeight] = dimensions.split('x').map(Number);
-        
         const allowedDimensions = [
             { w: 1024, h: 1024 }, { w: 1152, h: 896 }, { w: 1216, h: 832 },
             { w: 1344, h: 768 }, { w: 1536, h: 640 }, { w: 640, h: 1536 },
@@ -620,7 +620,6 @@ app.post('/inpainting', upload.fields([
         const originalAspectRatio = originalWidth / originalHeight;
         let bestDimension = allowedDimensions[0];
         let minAspectRatioDiff = Infinity;
-
         allowedDimensions.forEach(dim => {
             const diff = Math.abs((dim.w / dim.h) - originalAspectRatio);
             if (diff < minAspectRatioDiff) {
@@ -628,42 +627,41 @@ app.post('/inpainting', upload.fields([
                 bestDimension = dim;
             }
         });
-
         const resizedImagePath = path.join(uploadDir, `resized-${imageFile.filename}`);
         const resizedMaskPath = path.join(uploadDir, `resized-mask-${maskFile.filename}`);
         allTempFiles.push(resizedImagePath, resizedMaskPath);
-
         const resizeCommandImage = `ffmpeg -i "${imageFile.path}" -vf "scale=${bestDimension.w}:${bestDimension.h}:force_original_aspect_ratio=decrease,pad=${bestDimension.w}:${bestDimension.h}:-1:-1:color=black" -y "${resizedImagePath}"`;
         const resizeCommandMask = `ffmpeg -i "${maskFile.path}" -vf "scale=${bestDimension.w}:${bestDimension.h}:force_original_aspect_ratio=decrease,pad=${bestDimension.w}:${bestDimension.h}:-1:-1:color=black" -y "${resizedMaskPath}"`;
-
         await runFFmpeg(resizeCommandImage);
         await runFFmpeg(resizeCommandMask);
         
         const formData = new FormData();
         formData.append('init_image', fs.createReadStream(resizedImagePath));
         formData.append('mask_image', fs.createReadStream(resizedMaskPath));
-        formData.append('text_prompts[0][text]', prompt);
-        formData.append('mask_source', 'MASK_IMAGE_WHITE'); // <-- ADICIONE ESTA LINHA AQUI**
+        formData.append('mask_source', 'MASK_IMAGE_WHITE');
         formData.append('text_prompts[0][text]', prompt);
         formData.append('cfg_scale', 7);
         formData.append('samples', 1);
         formData.append('steps', 30);
-    
 
+        // --- ALTERAÇÃO PRINCIPAL AQUI ---
+        // Trocámos 'stable-inpainting-xl-1.0' pelo novo nome do modelo.
         const response = await fetch(
-            "https://api.stability.ai/v1/generation/stable-inpainting-xl-1.0/image-to-image/masking",
+            "https://api.stability.ai/v1/generation/stable-diffusion-xl-inpainting-1.0/image-to-image/masking",
             {
                 method: 'POST',
-                headers: { ...formData.getHeaders(), 'Accept': 'image/png', 'Authorization': `Bearer ${stabilityApiKey}` },
+                headers: { ...formData.getHeaders(), 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` },
                 body: formData,
             }
         );
 
         if (!response.ok) throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`);
 
-        const buffer = await response.buffer();
+        const responseJSON = await response.json();
+        const image = responseJSON.artifacts[0];
+        
         const outputPath = path.join(processedDir, `inpainted-${Date.now()}.png`);
-        fs.writeFileSync(outputPath, buffer);
+        fs.writeFileSync(outputPath, Buffer.from(image.base64, 'base64'));
         allTempFiles.push(outputPath);
 
         console.log("Inpainting concluído. Enviando imagem...");
@@ -937,6 +935,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
