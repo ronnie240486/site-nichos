@@ -682,7 +682,7 @@ app.post('/inpainting', upload.fields([
     }
 });
 
-// --- ROTA PARA GERADOR DE LOGOTIPOS (IA) - CORRIGIDA ---
+// --- ROTA PARA GERADOR DE LOGOTIPOS (IA) - COM MODELO CORRIGIDO ---
 app.post('/gerar-logo', upload.none(), async (req, res) => {
     const { prompt } = req.body;
 
@@ -698,7 +698,6 @@ app.post('/gerar-logo', upload.none(), async (req, res) => {
 
         console.log("Iniciando geração de logotipos com o prompt:", prompt);
 
-        // CORREÇÃO: Construir um objeto JSON em vez de FormData
         const payload = {
             text_prompts: [
                 {
@@ -712,17 +711,17 @@ app.post('/gerar-logo', upload.none(), async (req, res) => {
             height: 1024,
         };
 
+        // --- ALTERAÇÃO PRINCIPAL AQUI ---
+        // Trocamos 'stable-diffusion-v1-6' pelo modelo mais recente 'stable-diffusion-xl-1024-v1-0'
         const response = await fetch(
-            "https://api.stability.ai/v1/generation/stable-diffusion-v1-6/text-to-image",
+            "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image",
             {
                 method: 'POST',
                 headers: {
-                    // CORREÇÃO: Definir o Content-Type para application/json
                     'Content-Type': 'application/json',
                     'Accept': 'application/json',
                     'Authorization': `Bearer ${stabilityApiKey}`
                 },
-                // CORREÇÃO: Enviar o payload como uma string JSON
                 body: JSON.stringify(payload),
             }
         );
@@ -1006,6 +1005,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
