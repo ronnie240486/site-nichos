@@ -585,14 +585,13 @@ app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     }
 });
 
-// --- ROTA PARA INPAINTING (COM MODELO ESPECIALIZADO E PROMPT DINÂMICO) ---
+// ROTA PARA INPAINTING (COM MODELO ESPECIALIZADO E REDIMENSIONAMENTO)
 app.post('/inpainting', upload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'mask', maxCount: 1 }
 ]), async (req, res) => {
     const imageFile = req.files.image?.[0];
     const maskFile = req.files.mask?.[0];
-    // Pega o prompt enviado pelo frontend
     const { prompt } = req.body;
     let allTempFiles = [imageFile?.path, maskFile?.path].filter(Boolean);
 
@@ -606,13 +605,13 @@ app.post('/inpainting', upload.fields([
         if (!stabilityApiKey) throw new Error("A chave da API da Stability AI não está configurada.");
 
         console.log("Iniciando processo de Inpainting com modelo especializado...");
-
-        // Lógica de redimensionamento (mantida para evitar erros de dimensão)
+        
         const ffprobeCommand = `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "${imageFile.path}"`;
         const dimensions = await new Promise((resolve, reject) => {
             exec(ffprobeCommand, (err, stdout) => err ? reject(err) : resolve(stdout.trim()));
         });
         const [originalWidth, originalHeight] = dimensions.split('x').map(Number);
+        
         const allowedDimensions = [
             { w: 1024, h: 1024 }, { w: 1152, h: 896 }, { w: 1216, h: 832 },
             { w: 1344, h: 768 }, { w: 1536, h: 640 }, { w: 640, h: 1536 },
@@ -621,6 +620,7 @@ app.post('/inpainting', upload.fields([
         const originalAspectRatio = originalWidth / originalHeight;
         let bestDimension = allowedDimensions[0];
         let minAspectRatioDiff = Infinity;
+
         allowedDimensions.forEach(dim => {
             const diff = Math.abs((dim.w / dim.h) - originalAspectRatio);
             if (diff < minAspectRatioDiff) {
@@ -628,12 +628,51 @@ app.post('/inpainting', upload.fields([
                 bestDimension = dim;
             }
         });
+
         const resizedImagePath = path.join(uploadDir, `resized-${imageFile.filename}`);
         const resizedMaskPath = path.join(uploadDir, `resized-mask-${maskFile.filename}`);
         allTempFiles.push(resizedImagePath, resizedMaskPath);
+
         const resizeCommandImage = `ffmpeg -i "${imageFile.path}" -vf "scale=${bestDimension.w}:${bestDimension.h}:force_original_aspect_ratio=decrease,pad=${bestDimension.w}:${bestDimension.h}:-1:-1:color=black" -y "${resizedImagePath}"`;
         const resizeCommandMask = `ffmpeg -i "${maskFile.path}" -vf "scale=${bestDimension.w}:${bestDimension.h}:force_original_aspect_ratio=decrease,pad=${bestDimension.w}:${bestDimension.h}:-1:-1:color=black" -y "${resizedMaskPath}"`;
+
         await runFFmpeg(resizeCommandImage);
+        await runFFmpeg(resizeCommandMask);
+        
+        const formData = new FormData();
+        formData.append('image', fs.createReadStream(resizedImagePath));
+        formData.append('mask', fs.createReadStream(resizedMaskPath));
+        formData.append('prompt', prompt);
+        formData.append('output_format', 'png');
+
+        const response = await fetch(
+            "https://api.stability.ai/v1/generation/stable-inpainting-xl-1.0/image-to-image/masking",
+            {
+                method: 'POST',
+                headers: { ...formData.getHeaders(), 'Accept': 'image/png', 'Authorization': `Bearer ${stabilityApiKey}` },
+                body: formData,
+            }
+        );
+
+        if (!response.ok) throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`);
+
+        const buffer = await response.buffer();
+        const outputPath = path.join(processedDir, `inpainted-${Date.now()}.png`);
+        fs.writeFileSync(outputPath, buffer);
+        allTempFiles.push(outputPath);
+
+        console.log("Inpainting concluído. Enviando imagem...");
+        res.sendFile(outputPath, (err) => {
+            if (err) console.error('Erro ao enviar a imagem de inpainting:', err);
+            safeDeleteFiles(allTempFiles);
+        });
+
+    } catch (error) {
+        console.error('Erro no processo de Inpainting:', error);
+        safeDeleteFiles(allTempFiles);
+        if (!res.headersSent) res.status(500).send(`Erro interno no Inpainting: ${error.message}`);
+    }
+});
 
 // --- ROTAS DO IA TURBO ---
 
@@ -893,6 +932,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
