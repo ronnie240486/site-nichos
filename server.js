@@ -585,7 +585,7 @@ app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     }
 });
 
-// ROTA PARA INPAINTING (COM O MODELO MAIS RECENTE)
+// ROTA PARA INPAINTING (COM O MODELO MAIS RECENTE CORRIGIDO)
 app.post('/inpainting', upload.fields([
     { name: 'image', maxCount: 1 },
     { name: 'mask', maxCount: 1 }
@@ -645,9 +645,9 @@ app.post('/inpainting', upload.fields([
         formData.append('steps', 30);
 
         // --- ALTERAÇÃO PRINCIPAL AQUI ---
-        // Trocámos 'stable-inpainting-xl-1.0' pelo novo nome do modelo.
+        // Trocámos pelo novo nome do modelo de inpainting.
         const response = await fetch(
-            "https://api.stability.ai/v1/generation/stable-diffusion-xl-inpainting-1.0/image-to-image/masking",
+            "https://api.stability.ai/v1/generation/stable-inpainting-v1-0/image-to-image/masking",
             {
                 method: 'POST',
                 headers: { ...formData.getHeaders(), 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` },
@@ -935,6 +935,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
