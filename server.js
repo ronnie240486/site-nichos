@@ -585,83 +585,7 @@ app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     }
 });
 
-// ROTA PARA INPAINTING (COM MODELO ESTÁVEL E REDIMENSIONAMENTO CORRIGIDO)
-app.post('/inpainting', upload.fields([
-    { name: 'image', maxCount: 1 },
-    { name: 'mask', maxCount: 1 }
-]), async (req, res) => {
-    const imageFile = req.files.image?.[0];
-    const maskFile = req.files.mask?.[0];
-    const { prompt } = req.body;
-    let allTempFiles = [imageFile?.path, maskFile?.path].filter(Boolean);
-
-    if (!imageFile || !maskFile || !prompt) {
-        safeDeleteFiles(allTempFiles);
-        return res.status(400).send('Faltam a imagem, a máscara ou o prompt.');
-    }
-
-    try {
-        const stabilityApiKey = process.env.STABILITY_API_KEY || req.headers['x-stability-api-key'];
-        if (!stabilityApiKey) throw new Error("A chave da API da Stability AI não está configurada.");
-
-        console.log("Iniciando processo de Inpainting com o modelo v1-5...");
-
-        // --- INÍCIO DA CORREÇÃO: REDIMENSIONAMENTO PARA 512x512 ---
-        // Este modelo funciona melhor com imagens de 512x512.
-        const targetSize = 512;
-        const resizedImagePath = path.join(uploadDir, `resized-${imageFile.filename}`);
-        const resizedMaskPath = path.join(uploadDir, `resized-mask-${maskFile.filename}`);
-        allTempFiles.push(resizedImagePath, resizedMaskPath);
-
-        // Redimensiona a imagem e a máscara para 512x512, adicionando barras pretas se necessário para manter a proporção.
-        const resizeCommandImage = `ffmpeg -i "${imageFile.path}" -vf "scale=${targetSize}:${targetSize}:force_original_aspect_ratio=decrease,pad=${targetSize}:${targetSize}:-1:-1:color=black" -y "${resizedImagePath}"`;
-        const resizeCommandMask = `ffmpeg -i "${maskFile.path}" -vf "scale=${targetSize}:${targetSize}:force_original_aspect_ratio=decrease,pad=${targetSize}:${targetSize}:-1:-1:color=black" -y "${resizedMaskPath}"`;
-
-        await runFFmpeg(resizeCommandImage);
-        await runFFmpeg(resizeCommandMask);
-        // --- FIM DA CORREÇÃO ---
-        
-        const formData = new FormData();
-        formData.append('init_image', fs.createReadStream(resizedImagePath));
-        formData.append('mask_image', fs.createReadStream(resizedMaskPath));
-        formData.append('mask_source', 'MASK_IMAGE_WHITE');
-        formData.append('text_prompts[0][text]', prompt);
-        formData.append('cfg_scale', 7);
-        formData.append('samples', 1);
-        formData.append('steps', 30);
-
-        // --- ALTERAÇÃO PRINCIPAL AQUI ---
-        // Trocámos para o modelo 'stable-diffusion-v1-5', que é mais estável.
-        const response = await fetch(
-            "https://api.stability.ai/v1/generation/stable-diffusion-v1-5/image-to-image/masking",
-            {
-                method: 'POST',
-                headers: { ...formData.getHeaders(), 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` },
-                body: formData,
-            }
-        );
-
-        if (!response.ok) throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`);
-
-        const responseJSON = await response.json();
-        const image = responseJSON.artifacts[0];
-        
-        const outputPath = path.join(processedDir, `inpainted-${Date.now()}.png`);
-        fs.writeFileSync(outputPath, Buffer.from(image.base64, 'base64'));
-        allTempFiles.push(outputPath);
-
-        console.log("Inpainting concluído. Enviando imagem...");
-        res.sendFile(outputPath, (err) => {
-            if (err) console.error('Erro ao enviar a imagem de inpainting:', err);
-            safeDeleteFiles(allTempFiles);
-        });
-
-    } catch (error) {
-        console.error('Erro no processo de Inpainting:', error);
-        safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) res.status(500).send(`Erro interno no Inpainting: ${error.message}`);
-    }
-});
+Erro interno no Inpainting: API da Stability AI retornou um erro: {"id":"a36d1c1100a3b059718c3153b65b8b51","message":"The specified engine (ID stable-diffusion-v1-5) was not found.","name":"not_found"}
 
 // --- ROTAS DO IA TURBO ---
 
@@ -921,6 +845,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
