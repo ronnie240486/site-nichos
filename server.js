@@ -742,7 +742,7 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTA PARA WORKFLOW MÁGICO (COM NARRAÇÃO GEMINI) ---
+// --- ROTA PARA WORKFLOW MÁGICO (COM NARRAÇÃO GEMINI E MAIS ROBUSTA) ---
 app.post('/workflow-magico', upload.none(), async (req, res) => {
     const { topic } = req.body;
     let allTempFiles = [];
@@ -762,9 +762,23 @@ app.post('/workflow-magico', upload.none(), async (req, res) => {
         console.log(`[Workflow] Iniciado para o tópico: "${topic}"`);
 
         // Etapa 1: Gerar Roteiro
-        // ... (esta parte continua igual)
+        console.log("[Workflow] Etapa 1/5: A gerar roteiro...");
+        const scriptPrompt = `Crie um roteiro para um vídeo curto (40-60 segundos) sobre "${topic}". O roteiro deve ser envolvente, informativo e dividido em frases curtas. Responda APENAS com o texto do roteiro.`;
+        const scriptResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: scriptPrompt }] }] })
+        });
+        if (!scriptResponse.ok) throw new Error(`Falha ao gerar o roteiro: ${await scriptResponse.text()}`);
+        const scriptData = await scriptResponse.json();
+        const script = scriptData.candidates[0]?.content?.parts[0]?.text?.trim();
+        if (!script) throw new Error("A IA não conseguiu gerar um roteiro válido.");
+        
+        const scriptPath = path.join(uploadDir, `script-${Date.now()}.txt`);
+        fs.writeFileSync(scriptPath, script);
+        allTempFiles.push(scriptPath);
 
-        // Etapa 2: Gerar Narração (com Gemini TTS)
+        // Etapa 2: Gerar Narração
         console.log("[Workflow] Etapa 2/5: A gerar narração...");
         const narrationPrompt = `Diga com uma voz calma e informativa: ${script}`;
         const narrationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiApiKey}`, {
@@ -781,123 +795,41 @@ app.post('/workflow-magico', upload.none(), async (req, res) => {
         });
         if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
         const narrationData = await narrationResponse.json();
-        const audioPart = narrationData.candidates[0].content.parts[0];
+
+        // --- INÍCIO DA CORREÇÃO ---
+        const audioPart = narrationData.candidates?.[0]?.content?.parts?.[0];
+        if (!audioPart || !audioPart.inlineData || !audioPart.inlineData.data) {
+            throw new Error("A API de narração não retornou um áudio válido.");
+        }
+        
         const audioBase64 = audioPart.inlineData.data;
-        const sampleRate = parseInt(audioPart.inlineData.mimeType.match(/rate=(\d+)/)[1], 10);
+        const mimeType = audioPart.inlineData.mimeType;
+        const rateMatch = mimeType ? mimeType.match(/rate=(\d+)/) : null;
+        if (!rateMatch || !rateMatch[1]) {
+            throw new Error("Não foi possível determinar a taxa de amostragem (sample rate) do áudio gerado.");
+        }
+        const sampleRate = parseInt(rateMatch[1], 10);
+        // --- FIM DA CORREÇÃO ---
         
         const pcmData = Buffer.from(audioBase64, 'base64');
         const wavBuffer = pcmToWavBuffer(pcmData, sampleRate);
-
-        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`); // Salva como .wav
+        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`);
         fs.writeFileSync(narrationPath, wavBuffer);
         allTempFiles.push(narrationPath);
 
-        // ... (O resto da função, Etapas 3, 4 e 5, continua igual)
-
-    } catch (error) {
-        console.error('Erro no Workflow Mágico:', error);
-        safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) {
-            res.status(500).send(`Erro interno no Workflow Mágico: ${error.message}`);
-        }
-    }
-});
-// ROTA PARA INPAINTING (VOLTANDO AO MODELO XL QUE SABEMOS QUE EXISTE)
-app.post('/inpainting', upload.fields([
-    { name: 'image', maxCount: 1 },
-    { name: 'mask', maxCount: 1 }
-]), async (req, res) => {
-    const imageFile = req.files.image?.[0];
-    const maskFile = req.files.mask?.[0];
-    const { prompt } = req.body;
-    let allTempFiles = [imageFile?.path, maskFile?.path].filter(Boolean);
-
-    if (!imageFile || !maskFile || !prompt) {
-        safeDeleteFiles(allTempFiles);
-        return res.status(400).send('Faltam a imagem, a máscara ou o prompt.');
-    }
-
-    try {
-        const stabilityApiKey = process.env.STABILITY_API_KEY || req.headers['x-stability-api-key'];
-        if (!stabilityApiKey) throw new Error("A chave da API da Stability AI não está configurada.");
-
-        console.log("Iniciando processo de Inpainting com o modelo XL v1.0...");
-
-        // Lógica de redimensionamento para dimensões válidas do modelo XL
-        const ffprobeCommand = `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "${imageFile.path}"`;
-        const dimensions = await new Promise((resolve, reject) => {
-            exec(ffprobeCommand, (err, stdout) => err ? reject(err) : resolve(stdout.trim()));
+        // Etapa 3: Analisar Roteiro para Cenas
+        console.log("[Workflow] Etapa 3/5: A analisar cenas...");
+        const scenesPrompt = `Analise este roteiro e divida-o em 5 a 8 cenas visuais. Para cada cena, forneça um termo de busca conciso e em inglês para encontrar um vídeo de stock. Retorne um array de objetos JSON. Exemplo: [{"cena": 1, "termo_busca": "person meditating peacefully"}, ...]. Roteiro: "${script}"`;
+        const scenesResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: scenesPrompt }] }], generationConfig: { responseMimeType: "application/json" } })
         });
-        const [originalWidth, originalHeight] = dimensions.split('x').map(Number);
-        
-        const allowedDimensions = [
-            { w: 1024, h: 1024 }, { w: 1152, h: 896 }, { w: 1216, h: 832 },
-            { w: 1344, h: 768 }, { w: 1536, h: 640 }, { w: 640, h: 1536 },
-            { w: 768, h: 1344 }, { w: 832, h: 1216 }, { w: 896, h: 1152 }
-        ];
-        const originalAspectRatio = originalWidth / originalHeight;
-        let bestDimension = allowedDimensions[0];
-        let minAspectRatioDiff = Infinity;
-
-        allowedDimensions.forEach(dim => {
-            const diff = Math.abs((dim.w / dim.h) - originalAspectRatio);
-            if (diff < minAspectRatioDiff) {
-                minAspectRatioDiff = diff;
-                bestDimension = dim;
-            }
-        });
-
-        const resizedImagePath = path.join(uploadDir, `resized-${imageFile.filename}`);
-        const resizedMaskPath = path.join(uploadDir, `resized-mask-${maskFile.filename}`);
-        allTempFiles.push(resizedImagePath, resizedMaskPath);
-
-        const resizeCommandImage = `ffmpeg -i "${imageFile.path}" -vf "scale=${bestDimension.w}:${bestDimension.h}:force_original_aspect_ratio=decrease,pad=${bestDimension.w}:${bestDimension.h}:-1:-1:color=black" -y "${resizedImagePath}"`;
-        const resizeCommandMask = `ffmpeg -i "${maskFile.path}" -vf "scale=${bestDimension.w}:${bestDimension.h}:force_original_aspect_ratio=decrease,pad=${bestDimension.w}:${bestDimension.h}:-1:-1:color=black" -y "${resizedMaskPath}"`;
-
-        await runFFmpeg(resizeCommandImage);
-        await runFFmpeg(resizeCommandMask);
-        
-        const formData = new FormData();
-        formData.append('init_image', fs.createReadStream(resizedImagePath));
-        formData.append('mask_image', fs.createReadStream(resizedMaskPath));
-        formData.append('mask_source', 'MASK_IMAGE_WHITE');
-        formData.append('text_prompts[0][text]', prompt);
-        formData.append('cfg_scale', 7);
-        formData.append('samples', 1);
-        formData.append('steps', 30);
-
-        // --- ALTERAÇÃO PRINCIPAL AQUI ---
-        // Voltamos ao modelo 'stable-diffusion-xl-1024-v1-0'
-        const response = await fetch(
-            "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/image-to-image/masking",
-            {
-                method: 'POST',
-                headers: { ...formData.getHeaders(), 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` },
-                body: formData,
-            }
-        );
-
-        if (!response.ok) throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`);
-
-        const responseJSON = await response.json();
-        const image = responseJSON.artifacts[0];
-        
-        const outputPath = path.join(processedDir, `inpainted-${Date.now()}.png`);
-        fs.writeFileSync(outputPath, Buffer.from(image.base64, 'base64'));
-        allTempFiles.push(outputPath);
-
-        console.log("Inpainting concluído. Enviando imagem...");
-        res.sendFile(outputPath, (err) => {
-            if (err) console.error('Erro ao enviar a imagem de inpainting:', err);
-            safeDeleteFiles(allTempFiles);
-        });
-
-    } catch (error) {
-        console.error('Erro no processo de Inpainting:', error);
-        safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) res.status(500).send(`Erro interno no Inpainting: ${error.message}`);
-    }
-});
+        if (!scenesResponse.ok) throw new Error(`Falha ao analisar as cenas: ${await scenesResponse.text()}`);
+        const scenesData = await scenesResponse.json();
+        const scenesText = scenesData.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!scenesText) throw new Error("A IA não conseguiu gerar a lista de cenas.");
+        const scenes = JSON.parse(scenesText);
 
 // --- ROTA PARA GERADOR DE LOGOTIPOS (IA) - COM MODELO CORRIGIDO ---
 app.post('/gerar-logo', upload.none(), async (req, res) => {
@@ -1222,6 +1154,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
