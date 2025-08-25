@@ -742,7 +742,7 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO CORRIGIDA) ---
+// --- ROTA PARA WORKFLOW MÁGICO (COM NARRAÇÃO GEMINI) ---
 app.post('/workflow-magico', upload.none(), async (req, res) => {
     const { topic } = req.body;
     let allTempFiles = [];
@@ -752,13 +752,12 @@ app.post('/workflow-magico', upload.none(), async (req, res) => {
     }
 
     try {
-        // Pega as chaves dos headers da requisição
+        // Agora só precisamos das chaves do Gemini e Pexels
         const geminiApiKey = req.headers['x-gemini-api-key'];
         const pexelsApiKey = req.headers['x-pexels-api-key'];
-        const openaiApiKey = req.headers['x-openai-api-key']; // Chave para a narração
 
-        if (!geminiApiKey || !pexelsApiKey || !openaiApiKey) {
-            throw new Error("As chaves de API do Gemini, Pexels e OpenAI são necessárias.");
+        if (!geminiApiKey || !pexelsApiKey) {
+            throw new Error("As chaves de API do Gemini e da Pexels são necessárias.");
         }
 
         console.log(`[Workflow] Iniciado para o tópico: "${topic}"`);
@@ -779,17 +778,32 @@ app.post('/workflow-magico', upload.none(), async (req, res) => {
         fs.writeFileSync(scriptPath, script);
         allTempFiles.push(scriptPath);
 
-        // Etapa 2: Gerar Narração (com OpenAI para mais opções de voz)
+        // Etapa 2: Gerar Narração (com Gemini TTS)
         console.log("[Workflow] Etapa 2/5: A gerar narração...");
-        const narrationResponse = await fetch(`https://api.openai.com/v1/audio/speech`, {
+        const narrationPrompt = `Diga com uma voz calma e informativa: ${script}`;
+        const narrationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiApiKey}`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'tts-1', voice: 'alloy', input: script })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: "gemini-2.5-flash-preview-tts",
+                contents: [{ parts: [{ text: narrationPrompt }] }],
+                generationConfig: {
+                    responseModalities: ["AUDIO"],
+                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Iapetus' } } }
+                }
+            })
         });
         if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
-        const narrationBuffer = await narrationResponse.buffer();
-        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.mp3`);
-        fs.writeFileSync(narrationPath, narrationBuffer);
+        const narrationData = await narrationResponse.json();
+        const audioPart = narrationData.candidates[0].content.parts[0];
+        const audioBase64 = audioPart.inlineData.data;
+        const sampleRate = parseInt(audioPart.inlineData.mimeType.match(/rate=(\d+)/)[1], 10);
+        
+        const pcmData = Buffer.from(audioBase64, 'base64');
+        const wavBuffer = pcmToWavBuffer(pcmData, sampleRate);
+
+        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`); // Salva como .wav
+        fs.writeFileSync(narrationPath, wavBuffer);
         allTempFiles.push(narrationPath);
 
         // Etapa 3: Analisar Roteiro para Cenas (com Gemini)
@@ -1280,6 +1294,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
