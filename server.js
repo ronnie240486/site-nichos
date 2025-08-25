@@ -585,8 +585,6 @@ app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     }
 });
 
-Erro interno no Inpainting: API da Stability AI retornou um erro: {"id":"a36d1c1100a3b059718c3153b65b8b51","message":"The specified engine (ID stable-diffusion-v1-5) was not found.","name":"not_found"}
-
 // ROTA PARA INPAINTING (VOLTANDO AO MODELO XL QUE SABEMOS QUE EXISTE)
 app.post('/inpainting', upload.fields([
     { name: 'image', maxCount: 1 },
@@ -942,6 +940,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
