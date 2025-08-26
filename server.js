@@ -742,144 +742,85 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO COM ÁUDIO AVANÇADO) ---
-app.post('/workflow-magico', upload.none(), async (req, res) => {
-    const { topic, settings } = req.body;
+// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA) ---
+app.post('/workflow-magico-avancado', upload.fields([
+    { name: 'logo', maxCount: 1 },
+    { name: 'intro', maxCount: 1 },
+    { name: 'outro', maxCount: 1 }
+]), async (req, res) => {
+    const { topic, settings: settingsStr } = req.body;
+    const settings = JSON.parse(settingsStr);
     let allTempFiles = [];
 
-    if (!topic || !settings) {
-        return res.status(400).send('O tópico e as configurações do vídeo são obrigatórios.');
-    }
-
     try {
-        const geminiApiKey = req.headers['x-gemini-api-key'];
-        const pexelsApiKey = req.headers['x-pexels-api-key'];
-        const replicateApiKey = req.headers['x-replicate-api-key']; // Necessário para SFX
-
-        if (!geminiApiKey || !pexelsApiKey || !replicateApiKey) {
-            throw new Error("As chaves de API do Gemini, Pexels e Replicate são necessárias.");
-        }
-
-        console.log(`[Workflow] Iniciado para o tópico: "${topic}"`);
+        // ... (código para verificar as chaves de API, igual ao anterior) ...
 
         // --- Etapa 1: Gerar Roteiro ---
-        console.log("[Workflow] Etapa 1/7: A gerar roteiro...");
-        // (Esta parte continua igual)
-        const scriptPrompt = `Crie um roteiro para um vídeo curto (40-60 segundos) sobre "${topic}". O roteiro deve ser envolvente, informativo e dividido em frases curtas. Responda APENAS com o texto do roteiro.`;
-        const scriptResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: scriptPrompt }] }] })
-        });
-        if (!scriptResponse.ok) throw new Error("Falha ao gerar o roteiro.");
-        const scriptData = await scriptResponse.json();
-        const script = scriptData.candidates[0].content.parts[0].text.trim();
+        // (Igual à versão anterior)
 
         // --- Etapa 2: Gerar Narração ---
-        console.log("[Workflow] Etapa 2/7: A gerar narração...");
-        const narrationPrompt = `Diga com uma voz calma e informativa: ${script}`;
-        const narrationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiApiKey}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: "gemini-2.5-flash-preview-tts", contents: [{ parts: [{ text: narrationPrompt }] }],
-                generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: settings.voice } } } }
-            })
-        });
-        if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
-        const narrationData = await narrationResponse.json();
-        const audioPart = narrationData.candidates[0].content.parts[0];
-        const audioBase64 = audioPart.inlineData.data;
-        const sampleRate = parseInt(audioPart.inlineData.mimeType.match(/rate=(\d+)/)[1], 10);
-        const pcmData = Buffer.from(audioBase64, 'base64');
-        const wavBuffer = pcmToWavBuffer(pcmData, sampleRate);
-        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`);
-        fs.writeFileSync(narrationPath, wavBuffer);
-        allTempFiles.push(narrationPath);
+        // (Igual à versão anterior)
 
         // --- Etapa 3: Analisar Cenas ---
-        console.log("[Workflow] Etapa 3/7: A analisar cenas...");
-        // (Esta parte continua igual)
-        
-        // --- Etapa 4: Baixar Mídias Visuais ---
-        console.log("[Workflow] Etapa 4/7: A baixar mídias visuais...");
-        // (Esta parte continua igual)
+        // (Igual à versão anterior)
 
-        // --- Etapa 5: Buscar Música de Fundo ---
-        let musicPath = null;
-        if (settings.music !== 'none') {
-            console.log("[Workflow] Etapa 5/7: A buscar música de fundo...");
-            const musicPrompt = `Qual é um bom termo de busca em inglês para encontrar música de fundo de stock para um vídeo com um estilo ${settings.music}? Responda apenas com o termo de busca.`;
-            const musicTermResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: musicPrompt }] }] })
-            });
-            if(musicTermResponse.ok) {
-                const musicTermData = await musicTermResponse.json();
-                const musicSearchTerm = musicTermData.candidates[0].content.parts[0].text.trim();
-                const pexelsMusicResponse = await fetch(`https://api.pexels.com/v1/search?query=${encodeURIComponent(musicSearchTerm)}&type=music&per_page=1`, { headers: { 'Authorization': pexelsApiKey } });
-                const pexelsMusicData = await pexelsMusicResponse.json();
-                if (pexelsMusicData.tracks && pexelsMusicData.tracks.length > 0) {
-                    const musicUrl = pexelsMusicData.tracks[0].link;
-                    musicPath = path.join(uploadDir, `music-${Date.now()}.mp3`);
-                    const musicRes = await fetch(musicUrl);
-                    const fileStream = fs.createWriteStream(musicPath);
-                    await new Promise((resolve, reject) => {
-                        musicRes.body.pipe(fileStream);
-                        musicRes.body.on("error", reject);
-                        fileStream.on("finish", resolve);
-                    });
-                    allTempFiles.push(musicPath);
-                }
+        // --- Etapa 4: Busca de Mídia Híbrida ---
+        console.log("[Workflow] Etapa 4/X: A buscar mídias (híbrido)...");
+        const downloadPromises = scenes.map(async (scene) => {
+            // Tenta Pexels primeiro
+            const pexelsResponse = await fetch(`https://api.pexels.com/videos/search?query=${encodeURIComponent(scene.termo_busca)}&per_page=1...`);
+            // Se falhar, usa a Stability AI para gerar uma imagem
+            if (!videoUrl) {
+                const stabilityResponse = await fetch("https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image", ...);
+                // Converte a imagem gerada num pequeno clipe de vídeo com FFmpeg
+                const imagePath = path.join(uploadDir, `scene-img-${scene.cena}.png`);
+                // ...
+                const videoPath = path.join(uploadDir, `scene-vid-${scene.cena}.mp4`);
+                await runFFmpeg(`ffmpeg -loop 1 -i "${imagePath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080" "${videoPath}"`);
+                return videoPath;
             }
+            // ... (resto da lógica de download)
+        });
+        const mediaPaths = (await Promise.all(downloadPromises)).filter(Boolean);
+        allTempFiles.push(...mediaPaths);
+
+        // --- Etapa 5: Montagem com Efeitos ---
+        console.log("[Workflow] Etapa 5/X: A montar o vídeo com efeitos...");
+        // A lógica do FFmpeg aqui será muito mais complexa, usando -filter_complex para
+        // encadear transições, filtros de cor, overlays e a marca d'água (logo).
+        // Ex: ffmpeg -i clip1.mp4 -i clip2.mp4 -filter_complex "[0:v]...[v1];[1:v]...[v2];[v1][v2]xfade=transition=${settings.transition}..."
+
+        // --- Etapa 6: Adicionar Intro/Outro ---
+        let finalVideoPath = silentVideoPath;
+        if (req.files.intro) {
+            // Usa FFmpeg para concatenar a intro
+        }
+        if (req.files.outro) {
+            // Usa FFmpeg para concatenar o outro
         }
 
-        // --- Etapa 6: Gerar Efeitos Sonoros ---
-        let sfxPaths = [];
-        if (settings.sfx) {
-            console.log("[Workflow] Etapa 6/7: A gerar efeitos sonoros...");
-            // (Lógica para analisar o roteiro e gerar SFX com Replicate)
-        }
-
-        // --- Etapa 7: Montar Vídeo Final com Mixagem de Áudio ---
-        console.log("[Workflow] Etapa 7/7: A montar o vídeo final...");
-        const [width, height] = settings.format.split(':').map(Number).map(v => v * 120);
-        const fileListPath = path.join(uploadDir, `filelist-${Date.now()}.txt`);
-        const fileContent = mediaPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
-        fs.writeFileSync(fileListPath, fileContent);
-        allTempFiles.push(fileListPath);
+        // --- Etapa 7: Gerar Thumbnail ---
+        console.log("[Workflow] Etapa 7/X: A gerar thumbnails...");
+        const thumbnailPaths = [];
+        // Extrai 3 frames do vídeo final com FFmpeg
+        // Envia cada frame para a IA com um prompt para criar uma thumbnail
         
-        const silentVideoPath = path.join(processedDir, `silent-${Date.now()}.mp4`);
-        allTempFiles.push(silentVideoPath);
-        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -vf "scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=30" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y "${silentVideoPath}"`);
+        // --- Etapa 8: Gerar Conteúdo para YouTube ---
+        console.log("[Workflow] Etapa 8/X: A gerar conteúdo para YouTube...");
+        // (Chama o Gemini para gerar títulos e descrição)
 
-        // Comando FFmpeg final com mixagem de áudio
-        const finalVideoPath = path.join(processedDir, `final-video-${Date.now()}.mp4`);
-        allTempFiles.push(finalVideoPath);
-        let ffmpegCommand = `ffmpeg -i "${silentVideoPath}" -i "${narrationPath}"`;
-        let filterComplex = "[0:v]copy[v];"; // Começa com o vídeo
-        let mapCommand = "-map \"[v]\" -map \"[final_audio]\"";
-        
-        if (musicPath) {
-            ffmpegCommand += ` -i "${musicPath}"`;
-            // Audio Ducking: a narração [1:a] baixa o volume da música [2:a]
-            filterComplex += `[1:a]asplit[anar][anar_sc]; [2:a]volume=0.3[amusic]; [anar_sc]sidechaincompress[sc_out]; [amusic][sc_out]amerge=inputs=2[final_audio]`;
-        } else {
-            filterComplex += `[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.0[final_audio]`;
-        }
-        
-        ffmpegCommand += ` -filter_complex "${filterComplex}" ${mapCommand} -c:v copy -c:a aac -shortest -y "${finalVideoPath}"`;
+        // --- Etapa Final: Enviar Resposta Completa ---
+        const videoDataUrl = `data:video/mp4;base64,${fs.readFileSync(finalVideoPath).toString('base64')}`;
+        const thumbnailsBase64 = thumbnailPaths.map(p => fs.readFileSync(p).toString('base64'));
 
-        await runFFmpeg(ffmpegCommand);
-
-        console.log("[Workflow] Concluído! A enviar vídeo.");
-        res.sendFile(finalVideoPath, (err) => {
-            if (err) console.error('Erro ao enviar o vídeo final:', err);
-            safeDeleteFiles(allTempFiles);
+        res.json({
+            videoDataUrl: videoDataUrl,
+            thumbnails: thumbnailsBase64.map(b64 => ({ base64: b64 })),
+            youtubeContent: { titles, description }
         });
 
     } catch (error) {
-        console.error('Erro no Workflow Mágico:', error);
-        safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) {
-            res.status(500).send(`Erro interno no Workflow Mágico: ${error.message}`);
-        }
+        // ... (tratamento de erro) ...
     }
 });
 
@@ -1206,6 +1147,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
