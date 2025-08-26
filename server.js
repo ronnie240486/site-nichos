@@ -753,66 +753,154 @@ app.post('/workflow-magico-avancado', upload.fields([
     let allTempFiles = [];
 
     try {
-        // ... (código para verificar as chaves de API, igual ao anterior) ...
+        const logoFile = req.files.logo?.[0];
+        const introFile = req.files.intro?.[0];
+        const outroFile = req.files.outro?.[0];
+        if(logoFile) allTempFiles.push(logoFile.path);
+        if(introFile) allTempFiles.push(introFile.path);
+        if(outroFile) allTempFiles.push(outroFile.path);
+
+        const geminiApiKey = req.headers['x-gemini-api-key'];
+        const pexelsApiKey = req.headers['x-pexels-api-key'];
+        const stabilityApiKey = req.headers['x-stability-api-key'];
+
+        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey) {
+            throw new Error("As chaves de API do Gemini, Pexels e Stability AI são necessárias.");
+        }
+
+        console.log(`[Workflow Avançado] Iniciado para o tópico: "${topic}"`);
 
         // --- Etapa 1: Gerar Roteiro ---
-        // (Igual à versão anterior)
+        console.log("[Workflow] Etapa 1/8: A gerar roteiro...");
+        const scriptPrompt = `Crie um roteiro para um vídeo curto (40-60 segundos) sobre "${topic}". O roteiro deve ser envolvente, informativo e dividido em frases curtas. Responda APENAS com o texto do roteiro.`;
+        const scriptResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: scriptPrompt }] }] })
+        });
+        if (!scriptResponse.ok) throw new Error("Falha ao gerar o roteiro.");
+        const scriptData = await scriptResponse.json();
+        const script = scriptData.candidates[0].content.parts[0].text.trim();
 
         // --- Etapa 2: Gerar Narração ---
-        // (Igual à versão anterior)
+        console.log("[Workflow] Etapa 2/8: A gerar narração...");
+        const narrationPrompt = `Diga com uma voz calma e informativa: ${script}`;
+        const narrationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: "gemini-2.5-flash-preview-tts", contents: [{ parts: [{ text: narrationPrompt }] }],
+                generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: settings.voice } } } }
+            })
+        });
+        if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
+        const narrationData = await narrationResponse.json();
+        const audioPart = narrationData.candidates[0].content.parts[0];
+        const audioBase64 = audioPart.inlineData.data;
+        const sampleRate = parseInt(audioPart.inlineData.mimeType.match(/rate=(\d+)/)[1], 10);
+        const pcmData = Buffer.from(audioBase64, 'base64');
+        const wavBuffer = pcmToWavBuffer(pcmData, sampleRate);
+        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`);
+        fs.writeFileSync(narrationPath, wavBuffer);
+        allTempFiles.push(narrationPath);
 
         // --- Etapa 3: Analisar Cenas ---
-        // (Igual à versão anterior)
+        console.log("[Workflow] Etapa 3/8: A analisar cenas...");
+        const scenesPrompt = `Analise este roteiro e divida-o em 5 a 8 cenas visuais. Para cada cena, forneça um termo de busca conciso e em inglês para encontrar um vídeo de stock. Retorne um array de objetos JSON. Exemplo: [{"cena": 1, "termo_busca": "person meditating peacefully"}, ...]. Roteiro: "${script}"`;
+        const scenesResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: scenesPrompt }] }], generationConfig: { responseMimeType: "application/json" } })
+        });
+        if (!scenesResponse.ok) throw new Error("Falha ao analisar as cenas.");
+        const scenesData = await scenesResponse.json();
+        const scenes = JSON.parse(scenesData.candidates[0].content.parts[0].text);
 
         // --- Etapa 4: Busca de Mídia Híbrida ---
-        console.log("[Workflow] Etapa 4/X: A buscar mídias (híbrido)...");
+        console.log("[Workflow] Etapa 4/8: A buscar mídias (híbrido)...");
         const downloadPromises = scenes.map(async (scene) => {
-            // Tenta Pexels primeiro
-            const pexelsResponse = await fetch(`https://api.pexels.com/videos/search?query=${encodeURIComponent(scene.termo_busca)}&per_page=1...`);
-            // Se falhar, usa a Stability AI para gerar uma imagem
-            if (!videoUrl) {
-                const stabilityResponse = await fetch("https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image", ...);
-                // Converte a imagem gerada num pequeno clipe de vídeo com FFmpeg
+            const pexelsResponse = await fetch(`https://api.pexels.com/videos/search?query=${encodeURIComponent(scene.termo_busca)}&per_page=1&orientation=landscape`, { headers: { 'Authorization': pexelsApiKey } });
+            const pexelsData = await pexelsResponse.json();
+            const videoUrl = pexelsData.videos?.[0]?.video_files?.find(f => f.quality === 'hd')?.link;
+            
+            if (videoUrl) {
+                const videoPath = path.join(uploadDir, `scene-${scene.cena}.mp4`);
+                const videoRes = await fetch(videoUrl);
+                const fileStream = fs.createWriteStream(videoPath);
+                await new Promise((resolve, reject) => { videoRes.body.pipe(fileStream); videoRes.body.on("error", reject); fileStream.on("finish", resolve); });
+                return videoPath;
+            } else {
+                console.log(`Nenhum vídeo encontrado para "${scene.termo_busca}". A gerar imagem com IA...`);
+                const stabilityResponse = await fetch("https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image", {
+                    method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` },
+                    body: JSON.stringify({ text_prompts: [{ text: `${scene.termo_busca}, cinematic, high detail` }], steps: 30, width: 1024, height: 576 })
+                });
+                if (!stabilityResponse.ok) return null;
+                const stabilityData = await stabilityResponse.json();
+                const imageBase64 = stabilityData.artifacts[0].base64;
                 const imagePath = path.join(uploadDir, `scene-img-${scene.cena}.png`);
-                // ...
+                fs.writeFileSync(imagePath, Buffer.from(imageBase64, 'base64'));
+                allTempFiles.push(imagePath);
+                
                 const videoPath = path.join(uploadDir, `scene-vid-${scene.cena}.mp4`);
                 await runFFmpeg(`ffmpeg -loop 1 -i "${imagePath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080" "${videoPath}"`);
                 return videoPath;
             }
-            // ... (resto da lógica de download)
         });
         const mediaPaths = (await Promise.all(downloadPromises)).filter(Boolean);
         allTempFiles.push(...mediaPaths);
+        if (mediaPaths.length === 0) throw new Error("Nenhuma mídia pôde ser encontrada ou gerada.");
 
         // --- Etapa 5: Montagem com Efeitos ---
-        console.log("[Workflow] Etapa 5/X: A montar o vídeo com efeitos...");
-        // A lógica do FFmpeg aqui será muito mais complexa, usando -filter_complex para
-        // encadear transições, filtros de cor, overlays e a marca d'água (logo).
-        // Ex: ffmpeg -i clip1.mp4 -i clip2.mp4 -filter_complex "[0:v]...[v1];[1:v]...[v2];[v1][v2]xfade=transition=${settings.transition}..."
-
-        // --- Etapa 6: Adicionar Intro/Outro ---
-        let finalVideoPath = silentVideoPath;
-        if (req.files.intro) {
-            // Usa FFmpeg para concatenar a intro
-        }
-        if (req.files.outro) {
-            // Usa FFmpeg para concatenar o outro
-        }
-
-        // --- Etapa 7: Gerar Thumbnail ---
-        console.log("[Workflow] Etapa 7/X: A gerar thumbnails...");
-        const thumbnailPaths = [];
-        // Extrai 3 frames do vídeo final com FFmpeg
-        // Envia cada frame para a IA com um prompt para criar uma thumbnail
+        console.log("[Workflow] Etapa 5/8: A montar o vídeo com efeitos...");
+        const [width, height] = settings.format === '9:16' ? [1080, 1920] : [1920, 1080];
+        const fileListPath = path.join(uploadDir, `filelist-${Date.now()}.txt`);
+        const fileContent = mediaPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
+        fs.writeFileSync(fileListPath, fileContent);
+        allTempFiles.push(fileListPath);
         
-        // --- Etapa 8: Gerar Conteúdo para YouTube ---
-        console.log("[Workflow] Etapa 8/X: A gerar conteúdo para YouTube...");
-        // (Chama o Gemini para gerar títulos e descrição)
+        let filterComplex = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=30`;
+        if (settings.filter === 'cinematic') filterComplex += ',eq=contrast=1.1:saturation=1.2';
+        if (logoFile) filterComplex += `,overlay=W-w-10:10`;
+
+        const silentVideoPath = path.join(processedDir, `silent-${Date.now()}.mp4`);
+        allTempFiles.push(silentVideoPath);
+        const ffmpegBaseCmd = logoFile ? `ffmpeg -i "${logoFile.path}"` : 'ffmpeg';
+        await runFFmpeg(`${ffmpegBaseCmd} -f concat -safe 0 -i "${fileListPath}" -filter_complex "${filterComplex}" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y "${silentVideoPath}"`);
+
+        // --- Etapa 6: Adicionar Áudio ---
+        console.log("[Workflow] Etapa 6/8: A adicionar áudio...");
+        const audioVideoPath = path.join(processedDir, `audio-video-${Date.now()}.mp4`);
+        allTempFiles.push(audioVideoPath);
+        await runFFmpeg(`ffmpeg -i "${silentVideoPath}" -i "${narrationPath}" -c:v copy -c:a aac -map 0:v:0 -map 1:a:0 -shortest -y "${audioVideoPath}"`);
+
+        // --- Etapa 7: Adicionar Intro/Outro ---
+        let finalVideoPath = audioVideoPath;
+        if(introFile || outroFile) {
+            console.log("[Workflow] Etapa 7/8: A adicionar Intro/Outro...");
+            const concatList = [];
+            if(introFile) concatList.push(`file '${introFile.path.replace(/'/g, "'\\''")}'`);
+            concatList.push(`file '${audioVideoPath.replace(/'/g, "'\\''")}'`);
+            if(outroFile) concatList.push(`file '${outroFile.path.replace(/'/g, "'\\''")}'`);
+
+            const concatFilePath = path.join(uploadDir, `concat-list-${Date.now()}.txt`);
+            fs.writeFileSync(concatFilePath, concatList.join('\n'));
+            allTempFiles.push(concatFilePath);
+
+            const finalConcatPath = path.join(processedDir, `final-concat-${Date.now()}.mp4`);
+            await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${concatFilePath}" -c copy -y "${finalConcatPath}"`);
+            finalVideoPath = finalConcatPath;
+        } else {
+            console.log("[Workflow] Etapa 7/8: A saltar Intro/Outro...");
+        }
+
+        // --- Etapa 8: Gerar Conteúdo Extra (Thumbnails e Textos) ---
+        console.log("[Workflow] Etapa 8/8: A gerar conteúdo extra...");
+        const thumbnailPrompt = `Analise este roteiro e gere 3 prompts de imagem para criar uma thumbnail de vídeo chamativa para o YouTube. Roteiro: "${script}"`;
+        // (Lógica para gerar thumbnails com Stability AI e textos com Gemini)
+        const titles = [`Título Sugerido 1 para "${topic}"`, `Título Sugerido 2`];
+        const description = `Descrição gerada pela IA para o vídeo sobre "${topic}".\n\n#hashtag1 #hashtag2`;
+        const thumbnailsBase64 = []; // Preencher com as imagens geradas em base64
 
         // --- Etapa Final: Enviar Resposta Completa ---
         const videoDataUrl = `data:video/mp4;base64,${fs.readFileSync(finalVideoPath).toString('base64')}`;
-        const thumbnailsBase64 = thumbnailPaths.map(p => fs.readFileSync(p).toString('base64'));
-
+        
         res.json({
             videoDataUrl: videoDataUrl,
             thumbnails: thumbnailsBase64.map(b64 => ({ base64: b64 })),
@@ -820,7 +908,11 @@ app.post('/workflow-magico-avancado', upload.fields([
         });
 
     } catch (error) {
-        // ... (tratamento de erro) ...
+        console.error('Erro no Workflow Mágico Avançado:', error);
+        safeDeleteFiles(allTempFiles);
+        if (!res.headersSent) {
+            res.status(500).send(`Erro interno no Workflow Mágico: ${error.message}`);
+        }
     }
 });
 
@@ -1147,6 +1239,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
