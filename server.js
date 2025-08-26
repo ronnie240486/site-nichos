@@ -742,7 +742,7 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTA PARA WORKFLOW MÁGICO (COM NARRAÇÃO GEMINI E EFEITOS) ---
+// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA E FINAL) ---
 app.post('/workflow-magico-avancado', upload.fields([
     { name: 'logo', maxCount: 1 },
     { name: 'intro', maxCount: 1 },
@@ -760,7 +760,6 @@ app.post('/workflow-magico-avancado', upload.fields([
         if(introFile) allTempFiles.push(introFile.path);
         if(outroFile) allTempFiles.push(outroFile.path);
 
-        // CORREÇÃO: Remove a verificação da chave da OpenAI
         const geminiApiKey = req.headers['x-gemini-api-key'];
         const pexelsApiKey = req.headers['x-pexels-api-key'];
         const stabilityApiKey = req.headers['x-stability-api-key'];
@@ -800,18 +799,6 @@ app.post('/workflow-magico-avancado', upload.fields([
         const wavBuffer = pcmToWavBuffer(pcmData, sampleRate);
         const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`);
         fs.writeFileSync(narrationPath, wavBuffer);
-        allTempFiles.push(narrationPath);
-
-        // --- Etapa 2: Gerar Narração com Timestamps ---
-        console.log("[Workflow] Etapa 2/8: A gerar narração...");
-        const narrationResponse = await fetch(`https://api.openai.com/v1/audio/speech`, {
-            method: 'POST', headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'tts-1-hd', voice: 'alloy', input: script, response_format: 'mp3' })
-        });
-        if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
-        const narrationBuffer = await narrationResponse.buffer();
-        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.mp3`);
-        fs.writeFileSync(narrationPath, narrationBuffer);
         allTempFiles.push(narrationPath);
 
         // --- Etapa 3: Analisar Cenas ---
@@ -946,6 +933,7 @@ app.post('/workflow-magico-avancado', upload.fields([
         }
     }
 });
+
 
 // --- ROTA PARA GERADOR DE LOGOTIPOS (IA) - COM MODELO CORRIGIDO ---
 app.post('/gerar-logo', upload.none(), async (req, res) => {
@@ -1270,6 +1258,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
