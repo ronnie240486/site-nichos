@@ -801,18 +801,6 @@ app.post('/workflow-magico-avancado', upload.fields([
         const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`);
         fs.writeFileSync(narrationPath, wavBuffer);
         allTempFiles.push(narrationPath);
-        
-        // O resto das etapas continua igual...
-        // ...
-
-    } catch (error) {
-        console.error('Erro no Workflow Mágico Avançado:', error);
-        safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) {
-            res.status(500).send(`Erro interno no Workflow Mágico: ${error.message}`);
-        }
-    }
-});
 
         // --- Etapa 2: Gerar Narração com Timestamps ---
         console.log("[Workflow] Etapa 2/8: A gerar narração...");
@@ -1282,6 +1270,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
