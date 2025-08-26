@@ -742,7 +742,7 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO AVANÇADA COM NARRAÇÃO GEMINI) ---
+// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA E FINAL) ---
 app.post('/workflow-magico-avancado', upload.fields([
     { name: 'logo', maxCount: 1 },
     { name: 'intro', maxCount: 1 },
@@ -760,13 +760,13 @@ app.post('/workflow-magico-avancado', upload.fields([
         if(introFile) allTempFiles.push(introFile.path);
         if(outroFile) allTempFiles.push(outroFile.path);
 
-        // CORREÇÃO: Remove a verificação da chave da OpenAI
         const geminiApiKey = req.headers['x-gemini-api-key'];
         const pexelsApiKey = req.headers['x-pexels-api-key'];
         const stabilityApiKey = req.headers['x-stability-api-key'];
+        const openaiApiKey = req.headers['x-openai-api-key'];
 
-        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey) {
-            throw new Error("As chaves de API do Gemini, Pexels e Stability AI são necessárias.");
+        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey || !openaiApiKey) {
+            throw new Error("Todas as chaves de API (Gemini, Pexels, Stability, OpenAI) são necessárias.");
         }
 
         console.log(`[Workflow Avançado] Iniciado para o tópico: "${topic}"`);
@@ -781,26 +781,18 @@ app.post('/workflow-magico-avancado', upload.fields([
         const scriptData = await scriptResponse.json();
         const script = scriptData.candidates[0].content.parts[0].text.trim();
 
-        // --- Etapa 2: Gerar Narração com Gemini ---
+        // --- Etapa 2: Gerar Narração com Timestamps ---
         console.log("[Workflow] Etapa 2/8: A gerar narração...");
-        const narrationPrompt = `Diga com uma voz calma e informativa: ${script}`;
-        const narrationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiApiKey}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: "gemini-2.5-flash-preview-tts", contents: [{ parts: [{ text: narrationPrompt }] }],
-                generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: settings.voice } } } }
-            })
+        const narrationResponse = await fetch(`https://api.openai.com/v1/audio/speech`, {
+            method: 'POST', headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'tts-1-hd', voice: 'alloy', input: script, response_format: 'mp3' })
         });
         if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
-        const narrationData = await narrationResponse.json();
-        const audioPart = narrationData.candidates[0].content.parts[0];
-        const audioBase64 = audioPart.inlineData.data;
-        const sampleRate = parseInt(audioPart.inlineData.mimeType.match(/rate=(\d+)/)[1], 10);
-        const pcmData = Buffer.from(audioBase64, 'base64');
-        const wavBuffer = pcmToWavBuffer(pcmData, sampleRate);
-        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`);
-        fs.writeFileSync(narrationPath, wavBuffer);
+        const narrationBuffer = await narrationResponse.buffer();
+        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.mp3`);
+        fs.writeFileSync(narrationPath, narrationBuffer);
         allTempFiles.push(narrationPath);
+
         // --- Etapa 3: Analisar Cenas ---
         console.log("[Workflow] Etapa 3/8: A analisar cenas...");
         const scenesPrompt = `Analise este roteiro e divida-o em 5 a 8 cenas visuais. Para cada cena, forneça um termo de busca conciso e em inglês para encontrar um vídeo de stock. Retorne um array de objetos JSON. Exemplo: [{"cena": 1, "termo_busca": "person meditating peacefully"}, ...]. Roteiro: "${script}"`;
@@ -839,7 +831,6 @@ app.post('/workflow-magico-avancado', upload.fields([
                 allTempFiles.push(imagePath);
                 
                 const videoPath = path.join(uploadDir, `scene-vid-${scene.cena}.mp4`);
-                // Adiciona o efeito Ken Burns aqui se a opção estiver ativa
                 const kenburnsEffect = settings.kenburns ? `,zoompan=z='min(zoom+0.001,1.1)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` : '';
                 await runFFmpeg(`ffmpeg -loop 1 -i "${imagePath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080${kenburnsEffect}" -y "${videoPath}"`);
                 return videoPath;
@@ -909,7 +900,7 @@ app.post('/workflow-magico-avancado', upload.fields([
 
         // --- Etapa 8: Gerar Conteúdo Extra ---
         console.log("[Workflow] Etapa 8/8: A gerar conteúdo extra...");
-        const youtubePrompt = `Aja como um especialista em SEO para YouTube. Para um vídeo sobre "${topic}", gere 3 títulos chamativos e uma descrição otimizada com hashtags. Retorne como um objeto JSON.`;
+        const youtubePrompt = `Aja como um especialista em SEO para YouTube. Para um vídeo sobre "${topic}", gere 3 títulos chamativos e uma descrição otimizada com hashtags. Retorne como um objeto JSON com as chaves "titles" (um array de strings) e "description" (uma string).`;
         const youtubeResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ contents: [{ parts: [{ text: youtubePrompt }] }], generationConfig: { responseMimeType: "application/json" } })
@@ -1257,6 +1248,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
