@@ -926,61 +926,6 @@ app.post('/workflow-magico-avancado', upload.fields([
         }
     }
 });
-
-        // --- Etapa Final: Montagem com Efeitos ---
-        console.log("[Workflow] A montar o vídeo final com todos os efeitos...");
-        const [width, height] = settings.format === '9:16' ? [1080, 1920] : [1920, 1080];
-        
-        // Constrói a cadeia de filtros complexos
-        let filterComplex = '';
-        mediaPaths.forEach((p, i) => {
-            filterComplex += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v${i}];`;
-        });
-        
-        // Adiciona transições
-        for (let i = 0; i < mediaPaths.length - 1; i++) {
-            const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
-            const input2 = `[v${i+1}]`;
-            const output = `[vt${i}]`;
-            filterComplex += `${input1}${input2}xfade=transition=${settings.transition}:duration=1:offset=${(i+1)*5 - 1}${output};`;
-        }
-
-        let lastVideoOutput = `[vt${mediaPaths.length - 2}]`;
-        
-        // Adiciona filtro de cor
-        if (settings.filter !== 'none') {
-            let filterName = '';
-            if (settings.filter === 'cinematic') filterName = 'eq=contrast=1.1:saturation=1.2';
-            if (settings.filter === 'vintage') filterName = 'sepia';
-            filterComplex += `${lastVideoOutput}${filterName}[v_filtered];`;
-            lastVideoOutput = '[v_filtered]';
-        }
-        
-        // Adiciona legendas
-        if (subtitlesPath) {
-            filterComplex += `${lastVideoOutput}subtitles='${subtitlesPath.replace(/\\/g, '/')}'[v_subbed];`;
-            lastVideoOutput = '[v_subbed]';
-        }
-
-        const silentVideoPath = path.join(processedDir, `silent_complex-${Date.now()}.mp4`);
-        allTempFiles.push(silentVideoPath);
-        
-        const ffmpegInputs = mediaPaths.map(p => `-i "${p}"`).join(' ');
-        await runFFmpeg(`ffmpeg ${ffmpegInputs} -filter_complex "${filterComplex}" -map "${lastVideoOutput}" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y "${silentVideoPath}"`);
-
-        // Adiciona áudio e finaliza
-        const finalVideoPath = path.join(processedDir, `final-video-${Date.now()}.mp4`);
-        // ... (resto da lógica para adicionar narração, música, intro/outro, etc.)
-
-        res.json({
-            // ... (resposta final)
-        });
-
-    } catch (error) {
-        // ... (tratamento de erro)
-    }
-});
-
 // --- ROTA PARA GERADOR DE LOGOTIPOS (IA) - COM MODELO CORRIGIDO ---
 app.post('/gerar-logo', upload.none(), async (req, res) => {
     const { prompt } = req.body;
@@ -1304,6 +1249,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
