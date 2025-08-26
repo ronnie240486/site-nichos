@@ -760,13 +760,12 @@ app.post('/workflow-magico-avancado', upload.fields([
         if(introFile) allTempFiles.push(introFile.path);
         if(outroFile) allTempFiles.push(outroFile.path);
 
-        const geminiApiKey = req.headers['x-gemini-api-key'];
+       const geminiApiKey = req.headers['x-gemini-api-key'];
         const pexelsApiKey = req.headers['x-pexels-api-key'];
         const stabilityApiKey = req.headers['x-stability-api-key'];
-        const openaiApiKey = req.headers['x-openai-api-key'];
 
-        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey || !openaiApiKey) {
-            throw new Error("Todas as chaves de API (Gemini, Pexels, Stability, OpenAI) são necessárias.");
+        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey) {
+            throw new Error("As chaves de API do Gemini, Pexels e Stability AI são necessárias.");
         }
 
         console.log(`[Workflow Avançado] Iniciado para o tópico: "${topic}"`);
@@ -1250,6 +1249,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
