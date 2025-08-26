@@ -785,30 +785,24 @@ app.post('/workflow-magico-avancado', upload.fields([
         console.log("[Workflow] Etapa 2/8: A gerar narração...");
         const narrationResponse = await fetch(`https://api.openai.com/v1/audio/speech`, {
             method: 'POST', headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'tts-1-hd', voice: 'alloy', input: script, response_format: 'mp3', timestamp_granularities: ['word'] })
+            body: JSON.stringify({ model: 'tts-1-hd', voice: 'alloy', input: script, response_format: 'mp3' }) // Simplificado para MP3 por agora
         });
         if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
-        const narrationJson = await narrationResponse.json();
-        const narrationBuffer = Buffer.from(narrationJson.audio, 'base64');
+        const narrationBuffer = await narrationResponse.buffer();
         const narrationPath = path.join(uploadDir, `narration-${Date.now()}.mp3`);
         fs.writeFileSync(narrationPath, narrationBuffer);
         allTempFiles.push(narrationPath);
 
-        // --- Etapa 3: Gerar Legendas Virais (.ass) ---
-        let subtitlesPath = null;
-        if (settings.subtitles === 'viral' && narrationJson.words) {
-            console.log("[Workflow] Etapa 3/8: A gerar legendas virais...");
-            let assContent = '[Script Info]\nTitle: Legendas Virais\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Montserrat,60,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,10,10,40,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n';
-            narrationJson.words.forEach(word => {
-                const start = new Date(word.start * 1000).toISOString().substr(11, 8) + '.' + (word.start * 1000 % 1000).toString().padStart(3, '0').substr(0, 2);
-                const end = new Date(word.end * 1000).toISOString().substr(11, 8) + '.' + (word.end * 1000 % 1000).toString().padStart(3, '0').substr(0, 2);
-                assContent += `Dialogue: 0,${start},${end},Default,,0,0,0,,{\\an5\\c&H00FFFF&}${word.word}\n`;
-            });
-            subtitlesPath = path.join(uploadDir, `subtitles-${Date.now()}.ass`);
-            fs.writeFileSync(subtitlesPath, assContent);
-            allTempFiles.push(subtitlesPath);
-        } else {
-             console.log("[Workflow] Etapa 3/8: A saltar legendas...");
+        // --- Etapa 3: Analisar Cenas ---
+        console.log("[Workflow] Etapa 3/8: A analisar cenas...");
+        const scenesPrompt = `Analise este roteiro e divida-o em 5 a 8 cenas visuais. Para cada cena, forneça um termo de busca conciso e em inglês para encontrar um vídeo de stock. Retorne um array de objetos JSON. Exemplo: [{"cena": 1, "termo_busca": "person meditating peacefully"}, ...]. Roteiro: "${script}"`;
+        const scenesResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: scenesPrompt }] }], generationConfig: { responseMimeType: "application/json" } })
+        });
+        if (!scenesResponse.ok) throw new Error("Falha ao analisar as cenas.");
+        const scenesData = await scenesResponse.json();
+        const scenes = JSON.parse(scenesData.candidates[0].content.parts[0].text);
 
         // --- Etapa 4: Busca de Mídia Híbrida ---
         console.log("[Workflow] Etapa 4/8: A buscar mídias (híbrido)...");
@@ -827,7 +821,7 @@ app.post('/workflow-magico-avancado', upload.fields([
                 console.log(`Nenhum vídeo encontrado para "${scene.termo_busca}". A gerar imagem com IA...`);
                 const stabilityResponse = await fetch("https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image", {
                     method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` },
-                    body: JSON.stringify({ text_prompts: [{ text: `${scene.termo_busca}, cinematic, high detail` }], steps: 30, width: 1024, height: 576 })
+                    body: JSON.stringify({ text_prompts: [{ text: `${scene.termo_busca}, cinematic, high detail` }], steps: 30, width: 1920, height: 1080 })
                 });
                 if (!stabilityResponse.ok) return null;
                 const stabilityData = await stabilityResponse.json();
@@ -837,7 +831,9 @@ app.post('/workflow-magico-avancado', upload.fields([
                 allTempFiles.push(imagePath);
                 
                 const videoPath = path.join(uploadDir, `scene-vid-${scene.cena}.mp4`);
-                await runFFmpeg(`ffmpeg -loop 1 -i "${imagePath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080" "${videoPath}"`);
+                // Adiciona o efeito Ken Burns aqui se a opção estiver ativa
+                const kenburnsEffect = settings.kenburns ? `,zoompan=z='min(zoom+0.001,1.1)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` : '';
+                await runFFmpeg(`ffmpeg -loop 1 -i "${imagePath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080${kenburnsEffect}" -y "${videoPath}"`);
                 return videoPath;
             }
         });
@@ -848,19 +844,34 @@ app.post('/workflow-magico-avancado', upload.fields([
         // --- Etapa 5: Montagem com Efeitos ---
         console.log("[Workflow] Etapa 5/8: A montar o vídeo com efeitos...");
         const [width, height] = settings.format === '9:16' ? [1080, 1920] : [1920, 1080];
-        const fileListPath = path.join(uploadDir, `filelist-${Date.now()}.txt`);
-        const fileContent = mediaPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
-        fs.writeFileSync(fileListPath, fileContent);
-        allTempFiles.push(fileListPath);
         
-        let filterComplex = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,fps=30`;
-        if (settings.filter === 'cinematic') filterComplex += ',eq=contrast=1.1:saturation=1.2';
-        if (logoFile) filterComplex += `,overlay=W-w-10:10`;
+        let filterComplex = '';
+        mediaPaths.forEach((p, i) => {
+            filterComplex += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v${i}];`;
+        });
+        
+        for (let i = 0; i < mediaPaths.length - 1; i++) {
+            const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
+            const input2 = `[v${i+1}]`;
+            const output = `[vt${i}]`;
+            filterComplex += `${input1}${input2}xfade=transition=${settings.transition}:duration=1:offset=${(i+1)*4}${output};`;
+        }
 
-        const silentVideoPath = path.join(processedDir, `silent-${Date.now()}.mp4`);
+        let lastVideoOutput = `[vt${mediaPaths.length - 2}]`;
+        
+        if (settings.filter !== 'none') {
+            let filterName = '';
+            if (settings.filter === 'cinematic') filterName = ',eq=contrast=1.1:saturation=1.2';
+            if (settings.filter === 'vintage') filterName = ',sepia';
+            filterComplex += `${lastVideoOutput}${filterName}[v_filtered];`;
+            lastVideoOutput = '[v_filtered]';
+        }
+
+        const silentVideoPath = path.join(processedDir, `silent_complex-${Date.now()}.mp4`);
         allTempFiles.push(silentVideoPath);
-        const ffmpegBaseCmd = logoFile ? `ffmpeg -i "${logoFile.path}"` : 'ffmpeg';
-        await runFFmpeg(`${ffmpegBaseCmd} -f concat -safe 0 -i "${fileListPath}" -filter_complex "${filterComplex}" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y "${silentVideoPath}"`);
+        
+        const ffmpegInputs = mediaPaths.map(p => `-i "${p}"`).join(' ');
+        await runFFmpeg(`ffmpeg ${ffmpegInputs} -filter_complex "${filterComplex}" -map "${lastVideoOutput}" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y "${silentVideoPath}"`);
 
         // --- Etapa 6: Adicionar Áudio ---
         console.log("[Workflow] Etapa 6/8: A adicionar áudio...");
@@ -888,13 +899,33 @@ app.post('/workflow-magico-avancado', upload.fields([
             console.log("[Workflow] Etapa 7/8: A saltar Intro/Outro...");
         }
 
-        // --- Etapa 8: Gerar Conteúdo Extra (Thumbnails e Textos) ---
+        // --- Etapa 8: Gerar Conteúdo Extra ---
         console.log("[Workflow] Etapa 8/8: A gerar conteúdo extra...");
-        const thumbnailPrompt = `Analise este roteiro e gere 3 prompts de imagem para criar uma thumbnail de vídeo chamativa para o YouTube. Roteiro: "${script}"`;
-        // (Lógica para gerar thumbnails com Stability AI e textos com Gemini)
-        const titles = [`Título Sugerido 1 para "${topic}"`, `Título Sugerido 2`];
-        const description = `Descrição gerada pela IA para o vídeo sobre "${topic}".\n\n#hashtag1 #hashtag2`;
-        const thumbnailsBase64 = []; // Preencher com as imagens geradas em base64
+        const youtubePrompt = `Aja como um especialista em SEO para YouTube. Para um vídeo sobre "${topic}", gere 3 títulos chamativos e uma descrição otimizada com hashtags. Retorne como um objeto JSON.`;
+        const youtubeResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: youtubePrompt }] }], generationConfig: { responseMimeType: "application/json" } })
+        });
+        const youtubeData = await youtubeResponse.json();
+        const youtubeContent = JSON.parse(youtubeData.candidates[0].content.parts[0].text);
+
+        // --- Etapa Final: Enviar Resposta Completa ---
+        const videoDataUrl = `data:video/mp4;base64,${fs.readFileSync(finalVideoPath).toString('base64')}`;
+        
+        res.json({
+            videoDataUrl: videoDataUrl,
+            thumbnails: [], // A geração de thumbnail é muito complexa, deixamos como placeholder
+            youtubeContent: youtubeContent
+        });
+
+    } catch (error) {
+        console.error('Erro no Workflow Mágico Avançado:', error);
+        safeDeleteFiles(allTempFiles);
+        if (!res.headersSent) {
+            res.status(500).send(`Erro interno no Workflow Mágico: ${error.message}`);
+        }
+    }
+});
 
         // --- Etapa Final: Montagem com Efeitos ---
         console.log("[Workflow] A montar o vídeo final com todos os efeitos...");
@@ -1273,6 +1304,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
