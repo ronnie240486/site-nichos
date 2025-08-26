@@ -742,7 +742,7 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA E FINAL) ---
+// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA E FINAL CORRIGIDA) ---
 app.post('/workflow-magico-avancado', upload.fields([
     { name: 'logo', maxCount: 1 },
     { name: 'intro', maxCount: 1 },
@@ -760,7 +760,7 @@ app.post('/workflow-magico-avancado', upload.fields([
         if(introFile) allTempFiles.push(introFile.path);
         if(outroFile) allTempFiles.push(outroFile.path);
 
-       const geminiApiKey = req.headers['x-gemini-api-key'];
+        const geminiApiKey = req.headers['x-gemini-api-key'];
         const pexelsApiKey = req.headers['x-pexels-api-key'];
         const stabilityApiKey = req.headers['x-stability-api-key'];
 
@@ -780,16 +780,25 @@ app.post('/workflow-magico-avancado', upload.fields([
         const scriptData = await scriptResponse.json();
         const script = scriptData.candidates[0].content.parts[0].text.trim();
 
-        // --- Etapa 2: Gerar Narração com Timestamps ---
+        // --- Etapa 2: Gerar Narração com Gemini ---
         console.log("[Workflow] Etapa 2/8: A gerar narração...");
-        const narrationResponse = await fetch(`https://api.openai.com/v1/audio/speech`, {
-            method: 'POST', headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'tts-1-hd', voice: 'alloy', input: script, response_format: 'mp3' })
+        const narrationPrompt = `Diga com uma voz calma e informativa: ${script}`;
+        const narrationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: "gemini-2.5-flash-preview-tts", contents: [{ parts: [{ text: narrationPrompt }] }],
+                generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: settings.voice } } } }
+            })
         });
         if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
-        const narrationBuffer = await narrationResponse.buffer();
-        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.mp3`);
-        fs.writeFileSync(narrationPath, narrationBuffer);
+        const narrationData = await narrationResponse.json();
+        const audioPart = narrationData.candidates[0].content.parts[0];
+        const audioBase64 = audioPart.inlineData.data;
+        const sampleRate = parseInt(audioPart.inlineData.mimeType.match(/rate=(\d+)/)[1], 10);
+        const pcmData = Buffer.from(audioBase64, 'base64');
+        const wavBuffer = pcmToWavBuffer(pcmData, sampleRate);
+        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`);
+        fs.writeFileSync(narrationPath, wavBuffer);
         allTempFiles.push(narrationPath);
 
         // --- Etapa 3: Analisar Cenas ---
@@ -848,14 +857,18 @@ app.post('/workflow-magico-avancado', upload.fields([
             filterComplex += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v${i}];`;
         });
         
-        for (let i = 0; i < mediaPaths.length - 1; i++) {
-            const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
-            const input2 = `[v${i+1}]`;
-            const output = `[vt${i}]`;
-            filterComplex += `${input1}${input2}xfade=transition=${settings.transition}:duration=1:offset=${(i+1)*4}${output};`;
+        let lastVideoOutput;
+        if (mediaPaths.length > 1) {
+            for (let i = 0; i < mediaPaths.length - 1; i++) {
+                const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
+                const input2 = `[v${i+1}]`;
+                const output = `[vt${i}]`;
+                filterComplex += `${input1}${input2}xfade=transition=${settings.transition}:duration=1:offset=${(i+1)*4}${output};`;
+            }
+            lastVideoOutput = `[vt${mediaPaths.length - 2}]`;
+        } else {
+            lastVideoOutput = '[v0]'; // Apenas um clipe
         }
-
-        let lastVideoOutput = `[vt${mediaPaths.length - 2}]`;
         
         if (settings.filter !== 'none') {
             let filterName = '';
@@ -869,7 +882,8 @@ app.post('/workflow-magico-avancado', upload.fields([
         allTempFiles.push(silentVideoPath);
         
         const ffmpegInputs = mediaPaths.map(p => `-i "${p}"`).join(' ');
-        await runFFmpeg(`ffmpeg ${ffmpegInputs} -filter_complex "${filterComplex}" -map "${lastVideoOutput}" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y "${silentVideoPath}"`);
+        const finalMap = lastVideoOutput.includes('[') ? `-map "${lastVideoOutput}"` : `-map "[v0]"`;
+        await runFFmpeg(`ffmpeg ${ffmpegInputs} -filter_complex "${filterComplex}" ${finalMap} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y "${silentVideoPath}"`);
 
         // --- Etapa 6: Adicionar Áudio ---
         console.log("[Workflow] Etapa 6/8: A adicionar áudio...");
@@ -1249,6 +1263,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
