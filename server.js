@@ -955,6 +955,7 @@ app.post('/workflow-magico-avancado', upload.fields([
         }
     }
 });
+
 // --- ROTA PARA GERADOR DE LOGOTIPOS (IA) - COM MODELO CORRIGIDO ---
 app.post('/gerar-logo', upload.none(), async (req, res) => {
     const { prompt } = req.body;
@@ -1278,6 +1279,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
