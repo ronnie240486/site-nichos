@@ -32,151 +32,48 @@ const storage = multer.diskStorage({
     }
 });
 
-const upload = multer({
-    storage: storage,
-    limits: {
-        fieldSize: 50 * 1024 * 1024
-    }
-});
+const upload = multer({ storage: storage });
 
 // 4. Funções Auxiliares
-function runFFmpeg(command, options = {}) {
+function runFFmpeg(command) {
     return new Promise((resolve, reject) => {
         console.log(`Executando FFmpeg: ${command}`);
-        exec(command, options, (error, stdout, stderr) => {
+        exec(command, (error, stdout, stderr) => {
             if (error) {
                 console.error(`FFmpeg Stderr: ${stderr}`);
                 return reject(new Error(`Erro no FFmpeg: ${stderr || 'Erro desconhecido'}`));
             }
-            console.log(`FFmpeg Stdout: ${stdout}`);
             resolve();
-        });
-    });
-}
-
-function getMediaDuration(filePath) {
-    return new Promise((resolve, reject) => {
-        const command = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
-        exec(command, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`FFprobe Stderr: ${stderr}`);
-                return reject(new Error(`Erro no ffprobe: ${stderr}`));
-            }
-            resolve(parseFloat(stdout));
         });
     });
 }
 
 function safeDeleteFiles(files) {
     files.forEach(f => {
-        if (fs.existsSync(f)) {
-            try { 
+        if (f && fs.existsSync(f)) {
+            try {
                 fs.unlinkSync(f);
                 console.log(`Ficheiro temporário removido: ${f}`);
-            } catch(e) { 
-                console.error(`Erro ao deletar ${f}:`, e); 
+            } catch (e) {
+                console.error(`Erro ao deletar ${f}:`, e);
             }
         }
     });
 }
 
-function sendZipResponse(res, filesToZip, allTempFiles) {
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename=resultado.zip');
-    
-    archive.on('error', (err) => { 
-        console.error("Erro no Archiver:", err);
-        safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) {
-            res.status(500).send("Erro ao criar o arquivo zip.");
-        }
-    });
-
-    res.on('close', () => {
-        console.log('Conexão fechada, limpando ficheiros.');
-        safeDeleteFiles(allTempFiles);
-    });
-
-    archive.pipe(res);
-    filesToZip.forEach(file => {
-        archive.file(file.path, { name: file.name });
-    });
-    archive.finalize();
-}
-
-function getEffectFilter(effectName, durationPerImage, dValue, videoWidth, videoHeight) {
-    const fadeDuration = Math.min(1, durationPerImage / 2);
-    switch (effectName) {
-        case 'zoom':
-            return `zoompan=z='min(zoom+0.0015,1.5)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${videoWidth}x${videoHeight}`;
-        case 'fade':
-            return `fade=t=in:st=0:d=${fadeDuration},fade=t=out:st=${durationPerImage - fadeDuration}:d=${fadeDuration}`;
-        case 'glitch':
-            return `frei0r=glitch0r`;
-        case 'retro':
-            return `vignette,format=yuv420p`;
-        case 'blur':
-            return `gblur=sigma=5:enable='between(t,0,${durationPerImage})'`;
-        case 'grayscale':
-            return `format=gray`;
-        case 'sepia':
-            return `colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131`;
-        case 'shake':
-            return `frei0r=vertigo`;
-        case 'flash':
-            return `colorlevels=rimin=0.5:gimin=0.5:bimin=0.5`;
-        case 'invert':
-            return `negate`;
-        case 'slide-left':
-            return `overlay=x='-w+(t/${durationPerImage})*w':y=0`;
-        case 'slide-right':
-            return `overlay=x='w-(t/${durationPerImage})*w':y=0`;
-        case 'slide-up':
-            return `overlay=x=0:y='-h+(t/${durationPerImage})*h'`;
-        case 'slide-down':
-            return `overlay=x=0:y='h-(t/${durationPerImage})*h'`;
-        case 'rotate':
-            return `rotate=angle=2*PI*t/${durationPerImage}:fillcolor=black`;
-        case 'pulse':
-            return `scale=w='iw*abs(1.05-0.05*sin(2*PI*t/${durationPerImage}))':h='ih*abs(1.05-0.05*sin(2*PI*t/${durationPerImage}))'`;
-        case 'neon':
-            return `frei0r=glow`;
-        case 'rainbow':
-            return `frei0r=rgbparade`;
-        case 'old-film':
-            return `frei0r=oldfilm`;
-        case 'pixel':
-            return `pixelize=w=32:h=32`;
-        case 'cartoon':
-            return `frei0r=cartoon`;
-        case 'matrix':
-            return `frei0r=matrix`;
-        case '3d':
-            return `frei0r=threed`;
-        case 'mirror':
-            return `hflip`;
-        case 'fire':
-            return `frei0r=burn`;
-        default:
-            return `zoompan=z='min(zoom+0.0015,1.5)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${videoWidth}x${videoHeight}`;
-    }
-}
 function pcmToWavBuffer(pcmData, sampleRate) {
     const numChannels = 1;
     const bitsPerSample = 16;
     const blockAlign = (numChannels * bitsPerSample) / 8;
     const byteRate = sampleRate * blockAlign;
     const dataSize = pcmData.length;
-    
     const buffer = Buffer.alloc(44 + dataSize);
-    
     buffer.write('RIFF', 0);
     buffer.writeUInt32LE(36 + dataSize, 4);
     buffer.write('WAVE', 8);
     buffer.write('fmt ', 12);
-    buffer.writeUInt32LE(16, 16); // Subchunk1Size for PCM
-    buffer.writeUInt16LE(1, 20); // AudioFormat (1 for PCM)
+    buffer.writeUInt32LE(16, 16);
+    buffer.writeUInt16LE(1, 20);
     buffer.writeUInt16LE(numChannels, 22);
     buffer.writeUInt32LE(sampleRate, 24);
     buffer.writeUInt32LE(byteRate, 28);
@@ -185,7 +82,6 @@ function pcmToWavBuffer(pcmData, sampleRate) {
     buffer.write('data', 36);
     buffer.writeUInt32LE(dataSize, 40);
     pcmData.copy(buffer, 44);
-    
     return buffer;
 }
 
@@ -742,7 +638,7 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA E FINAL CORRIGIDA) ---
+// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA E FINAL) ---
 app.post('/workflow-magico-avancado', upload.fields([
     { name: 'logo', maxCount: 1 },
     { name: 'intro', maxCount: 1 },
@@ -763,9 +659,10 @@ app.post('/workflow-magico-avancado', upload.fields([
         const geminiApiKey = req.headers['x-gemini-api-key'];
         const pexelsApiKey = req.headers['x-pexels-api-key'];
         const stabilityApiKey = req.headers['x-stability-api-key'];
+        const openaiApiKey = req.headers['x-openai-api-key'];
 
-        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey) {
-            throw new Error("As chaves de API do Gemini, Pexels e Stability AI são necessárias.");
+        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey || !openaiApiKey) {
+            throw new Error("Todas as chaves de API (Gemini, Pexels, Stability, OpenAI) são necessárias.");
         }
 
         console.log(`[Workflow Avançado] Iniciado para o tópico: "${topic}"`);
@@ -780,25 +677,16 @@ app.post('/workflow-magico-avancado', upload.fields([
         const scriptData = await scriptResponse.json();
         const script = scriptData.candidates[0].content.parts[0].text.trim();
 
-        // --- Etapa 2: Gerar Narração com Gemini ---
+        // --- Etapa 2: Gerar Narração com Timestamps ---
         console.log("[Workflow] Etapa 2/8: A gerar narração...");
-        const narrationPrompt = `Diga com uma voz calma e informativa: ${script}`;
-        const narrationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiApiKey}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: "gemini-2.5-flash-preview-tts", contents: [{ parts: [{ text: narrationPrompt }] }],
-                generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: settings.voice } } } }
-            })
+        const narrationResponse = await fetch(`https://api.openai.com/v1/audio/speech`, {
+            method: 'POST', headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'tts-1-hd', voice: 'alloy', input: script, response_format: 'mp3' })
         });
         if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
-        const narrationData = await narrationResponse.json();
-        const audioPart = narrationData.candidates[0].content.parts[0];
-        const audioBase64 = audioPart.inlineData.data;
-        const sampleRate = parseInt(audioPart.inlineData.mimeType.match(/rate=(\d+)/)[1], 10);
-        const pcmData = Buffer.from(audioBase64, 'base64');
-        const wavBuffer = pcmToWavBuffer(pcmData, sampleRate);
-        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`);
-        fs.writeFileSync(narrationPath, wavBuffer);
+        const narrationBuffer = await narrationResponse.buffer();
+        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.mp3`);
+        fs.writeFileSync(narrationPath, narrationBuffer);
         allTempFiles.push(narrationPath);
 
         // --- Etapa 3: Analisar Cenas ---
@@ -858,6 +746,7 @@ app.post('/workflow-magico-avancado', upload.fields([
         });
         
         let lastVideoOutput;
+        // CORREÇÃO: Lida com o caso de ter apenas 1 clipe de vídeo
         if (mediaPaths.length > 1) {
             for (let i = 0; i < mediaPaths.length - 1; i++) {
                 const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
@@ -867,7 +756,7 @@ app.post('/workflow-magico-avancado', upload.fields([
             }
             lastVideoOutput = `[vt${mediaPaths.length - 2}]`;
         } else {
-            lastVideoOutput = '[v0]'; // Apenas um clipe
+            lastVideoOutput = '[v0]'; // Apenas um clipe, sem transição
         }
         
         if (settings.filter !== 'none') {
@@ -1263,6 +1152,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
