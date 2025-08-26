@@ -742,7 +742,7 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA E COMPLETA) ---
+// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO AVANÇADA COM NARRAÇÃO GEMINI) ---
 app.post('/workflow-magico-avancado', upload.fields([
     { name: 'logo', maxCount: 1 },
     { name: 'intro', maxCount: 1 },
@@ -760,13 +760,13 @@ app.post('/workflow-magico-avancado', upload.fields([
         if(introFile) allTempFiles.push(introFile.path);
         if(outroFile) allTempFiles.push(outroFile.path);
 
+        // CORREÇÃO: Remove a verificação da chave da OpenAI
         const geminiApiKey = req.headers['x-gemini-api-key'];
         const pexelsApiKey = req.headers['x-pexels-api-key'];
         const stabilityApiKey = req.headers['x-stability-api-key'];
-        const openaiApiKey = req.headers['x-openai-api-key'];
 
-        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey || !openaiApiKey) {
-            throw new Error("Todas as chaves de API (Gemini, Pexels, Stability, OpenAI) são necessárias.");
+        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey) {
+            throw new Error("As chaves de API do Gemini, Pexels e Stability AI são necessárias.");
         }
 
         console.log(`[Workflow Avançado] Iniciado para o tópico: "${topic}"`);
@@ -781,18 +781,26 @@ app.post('/workflow-magico-avancado', upload.fields([
         const scriptData = await scriptResponse.json();
         const script = scriptData.candidates[0].content.parts[0].text.trim();
 
-        // --- Etapa 2: Gerar Narração com Timestamps ---
+        // --- Etapa 2: Gerar Narração com Gemini ---
         console.log("[Workflow] Etapa 2/8: A gerar narração...");
-        const narrationResponse = await fetch(`https://api.openai.com/v1/audio/speech`, {
-            method: 'POST', headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'tts-1-hd', voice: 'alloy', input: script, response_format: 'mp3' }) // Simplificado para MP3 por agora
+        const narrationPrompt = `Diga com uma voz calma e informativa: ${script}`;
+        const narrationResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiApiKey}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: "gemini-2.5-flash-preview-tts", contents: [{ parts: [{ text: narrationPrompt }] }],
+                generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: settings.voice } } } }
+            })
         });
         if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
-        const narrationBuffer = await narrationResponse.buffer();
-        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.mp3`);
-        fs.writeFileSync(narrationPath, narrationBuffer);
+        const narrationData = await narrationResponse.json();
+        const audioPart = narrationData.candidates[0].content.parts[0];
+        const audioBase64 = audioPart.inlineData.data;
+        const sampleRate = parseInt(audioPart.inlineData.mimeType.match(/rate=(\d+)/)[1], 10);
+        const pcmData = Buffer.from(audioBase64, 'base64');
+        const wavBuffer = pcmToWavBuffer(pcmData, sampleRate);
+        const narrationPath = path.join(uploadDir, `narration-${Date.now()}.wav`);
+        fs.writeFileSync(narrationPath, wavBuffer);
         allTempFiles.push(narrationPath);
-
         // --- Etapa 3: Analisar Cenas ---
         console.log("[Workflow] Etapa 3/8: A analisar cenas...");
         const scenesPrompt = `Analise este roteiro e divida-o em 5 a 8 cenas visuais. Para cada cena, forneça um termo de busca conciso e em inglês para encontrar um vídeo de stock. Retorne um array de objetos JSON. Exemplo: [{"cena": 1, "termo_busca": "person meditating peacefully"}, ...]. Roteiro: "${script}"`;
@@ -1249,6 +1257,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
