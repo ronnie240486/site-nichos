@@ -302,74 +302,90 @@ app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
-// --- ROTA PARA O GERADOR DE VÍDEO (EDITOR) ---
-app.post('/render-video-editor', upload.array('media'), async (req, res) => {
+// --- ROTA PARA O EDITOR DE VÍDEO COM TIMELINE ---
+app.post('/render-timeline', upload.array('media'), async (req, res) => {
+    const { payload } = req.body;
     const files = req.files || [];
-    if (files.length === 0) {
-        return res.status(400).send('Nenhum ficheiro de mídia enviado.');
+    
+    if (!payload || files.length === 0) {
+        return res.status(400).send('Dados da timeline ou ficheiros em falta.');
     }
 
     const allTempFiles = files.map(f => f.path);
-    const videoClips = []; // Array para guardar os caminhos dos vídeos prontos para unir
-
+    
     try {
-        console.log(`[Editor] Iniciando processamento para ${files.length} ficheiros.`);
+        const data = JSON.parse(payload);
+        const { clips, settings } = data;
 
-        // Etapa 1: Converter todas as imagens em clipes de vídeo de 5 segundos
-        for (const file of files) {
-            const inputPath = file.path;
+        // Mapeia os ficheiros recebidos para garantir a ordem correta da timeline
+        const filesByName = files.reduce((acc, file) => {
+            acc[file.originalname] = file.path;
+            return acc;
+        }, {});
+        const orderedFilePaths = clips.map(clip => filesByName[clip.originalName]);
+
+        const videoClips = [];
+
+        // Etapa 1: Garante que tudo são vídeos (converte imagens)
+        for (let i = 0; i < orderedFilePaths.length; i++) {
+            const filePath = orderedFilePaths[i];
+            const clipInfo = clips[i];
             
-            // Se for uma imagem, converte para vídeo
-            if (file.mimetype.startsWith('image/')) {
-                const outputPath = path.join(processedDir, `clip-${path.basename(file.filename, path.extname(file.filename))}.mp4`);
+            if (clipInfo.type === 'image') {
+                const outputPath = path.join(processedDir, `clip-${i}.mp4`);
                 allTempFiles.push(outputPath);
-                
-                // Comando FFmpeg para criar um vídeo de 5s a partir de uma imagem
-                const command = `ffmpeg -loop 1 -i "${inputPath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -y "${outputPath}"`;
+                const command = `ffmpeg -loop 1 -i "${filePath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -y "${outputPath}"`;
                 await runFFmpeg(command);
                 videoClips.push(outputPath);
-            } 
-            // Se já for um vídeo, apenas o adiciona à lista
-            else if (file.mimetype.startsWith('video/')) {
-                // Opcional: Re-encodar para garantir compatibilidade
-                const outputPath = path.join(processedDir, `clip-${path.basename(file.filename, path.extname(file.filename))}.mp4`);
+            } else {
+                // Opcional: Re-encodar vídeos para normalizar
+                const outputPath = path.join(processedDir, `clip-${i}.mp4`);
                 allTempFiles.push(outputPath);
-                const command = `ffmpeg -i "${inputPath}" -c:v libx264 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -an -y "${outputPath}"`;
+                const command = `ffmpeg -i "${filePath}" -c:v libx264 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -an -y "${outputPath}"`;
                 await runFFmpeg(command);
                 videoClips.push(outputPath);
             }
         }
 
-        if (videoClips.length === 0) {
-            throw new Error("Nenhum ficheiro de vídeo ou imagem válido foi processado.");
-        }
-
-        // Etapa 2: Unir todos os clipes de vídeo
-        const fileListPath = path.join(uploadDir, `editor-list-${Date.now()}.txt`);
-        const finalOutputPath = path.join(processedDir, `editor-final-${Date.now()}.mp4`);
-        allTempFiles.push(fileListPath, finalOutputPath);
-
-        const fileContent = videoClips.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
-        fs.writeFileSync(fileListPath, fileContent);
-
-        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -c copy -y "${finalOutputPath}"`);
+        // Etapa 2: Unir os clipes com transições
+        const finalOutputPath = path.join(processedDir, `timeline-final-${Date.now()}.mp4`);
+        allTempFiles.push(finalOutputPath);
         
-        console.log('[Editor] Vídeo final criado com sucesso.');
-
-        // Etapa 3: Enviar o vídeo final de volta para o utilizador
-        res.sendFile(finalOutputPath, (err) => {
-            if (err) {
-                console.error('Erro ao enviar o vídeo final:', err);
+        if (videoClips.length === 1) {
+            // Se houver apenas um clipe, simplesmente copia-o
+            fs.copyFileSync(videoClips[0], finalOutputPath);
+        } else {
+            // Constrói um comando FFmpeg complexo com o filtro 'xfade' para transições
+            const inputs = videoClips.map((p, i) => `-i "${p}"`).join(' ');
+            let filterComplex = '';
+            // Prepara cada clipe
+            videoClips.forEach((p, i) => {
+                filterComplex += `[${i}:v]settb=1/25,fps=25[v${i}];`;
+            });
+            // Aplica as transições
+            for (let i = 0; i < videoClips.length - 1; i++) {
+                const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
+                const input2 = `[v${i+1}]`;
+                const output = `[vt${i}]`;
+                // Cada clipe tem 5s, a transição começa no 4º segundo
+                filterComplex += `${input1}${input2}xfade=transition=${settings.transition || 'fade'}:duration=1:offset=${(i+1)*5 - 1}${output};`;
             }
-            // Limpa todos os ficheiros temporários após o envio
+            const lastOutput = `[vt${videoClips.length - 2}]`;
+            
+            await runFFmpeg(`ffmpeg ${inputs} -filter_complex "${filterComplex}" -map "${lastOutput}" -c:v libx264 -pix_fmt yuv420p -y "${finalOutputPath}"`);
+        }
+
+        // Etapa 3: Enviar o vídeo final
+        res.sendFile(finalOutputPath, (err) => {
+            if (err) console.error('Erro ao enviar vídeo:', err);
             safeDeleteFiles(allTempFiles);
         });
 
     } catch (error) {
-        console.error('Erro no /render-video-editor:', error);
+        console.error('Erro em /render-timeline:', error);
         safeDeleteFiles(allTempFiles);
         if (!res.headersSent) {
-            res.status(500).send(`Erro ao processar o vídeo: ${error.message}`);
+            res.status(500).send(`Erro ao processar a timeline: ${error.message}`);
         }
     }
 });
@@ -1223,6 +1239,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
