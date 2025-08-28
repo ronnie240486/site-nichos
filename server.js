@@ -347,34 +347,34 @@ app.post('/render-timeline', upload.array('media'), async (req, res) => {
             }
         }
 
-        // Etapa 2: Unir os clipes com transições
-        const finalOutputPath = path.join(processedDir, `timeline-final-${Date.now()}.mp4`);
-        allTempFiles.push(finalOutputPath);
-        
-        if (videoClips.length === 1) {
-            // Se houver apenas um clipe, simplesmente copia-o
-            fs.copyFileSync(videoClips[0], finalOutputPath);
-        } else {
-            // Constrói um comando FFmpeg complexo com o filtro 'xfade' para transições
-            const inputs = videoClips.map((p, i) => `-i "${p}"`).join(' ');
-            let filterComplex = '';
-            // Prepara cada clipe
-            videoClips.forEach((p, i) => {
-                filterComplex += `[${i}:v]settb=1/25,fps=25[v${i}];`;
-            });
-            // Aplica as transições
-            for (let i = 0; i < videoClips.length - 1; i++) {
-                const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
-                const input2 = `[v${i+1}]`;
-                const output = `[vt${i}]`;
-                // Cada clipe tem 5s, a transição começa no 4º segundo
-                filterComplex += `${input1}${input2}xfade=transition=${settings.transition || 'fade'}:duration=1:offset=${(i+1)*5 - 1}${output};`;
-            }
-            const lastOutput = `[vt${videoClips.length - 2}]`;
-            
-            await runFFmpeg(`ffmpeg ${inputs} -filter_complex "${filterComplex}" -map "${lastOutput}" -c:v libx264 -pix_fmt yuv420p -y "${finalOutputPath}"`);
-        }
+        // Etapa 2: Unir os clipes com transições ou preparar o clipe único
+const finalOutputPath = path.join(processedDir, `timeline-final-${Date.now()}.mp4`);
+allTempFiles.push(finalOutputPath);
 
+if (videoClips.length === 1) {
+    // CORREÇÃO: Em vez de copiar, apenas renomeia o ficheiro existente.
+    // Isto é mais rápido e evita o erro.
+    fs.renameSync(videoClips[0], finalOutputPath);
+} else {
+    // Constrói um comando FFmpeg complexo com o filtro 'xfade' para transições
+    const inputs = videoClips.map((p, i) => `-i "${p}"`).join(' ');
+    let filterComplex = '';
+    // Prepara cada clipe
+    videoClips.forEach((p, i) => {
+        filterComplex += `[${i}:v]settb=1/25,fps=25[v${i}];`;
+    });
+    // Aplica as transições
+    for (let i = 0; i < videoClips.length - 1; i++) {
+        const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
+        const input2 = `[v${i+1}]`;
+        const output = `[vt${i}]`;
+        // Cada clipe tem 5s, a transição começa no 4º segundo
+        filterComplex += `${input1}${input2}xfade=transition=${settings.transition || 'fade'}:duration=1:offset=${(i+1)*5 - 1}${output};`;
+    }
+    const lastOutput = `[vt${videoClips.length - 2}]`;
+
+    await runFFmpeg(`ffmpeg ${inputs} -filter_complex "${filterComplex}" -map "${lastOutput}" -c:v libx264 -pix_fmt yuv420p -y "${finalOutputPath}"`);
+}
         // Etapa 3: Enviar o vídeo final
         res.sendFile(finalOutputPath, (err) => {
             if (err) console.error('Erro ao enviar vídeo:', err);
@@ -1239,6 +1239,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
