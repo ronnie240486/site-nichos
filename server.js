@@ -303,22 +303,26 @@ app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
     }
 });
 // --- ROTA PARA O EDITOR DE VÍDEO COM TIMELINE ---
-app.post('/render-timeline', upload.array('media'), async (req, res) => {
+app.post('/render-timeline', upload.fields([
+    { name: 'media' }, 
+    { name: 'audio', maxCount: 1 }
+]), async (req, res) => {
     const { payload } = req.body;
-    const files = req.files || [];
+    const mediaFiles = req.files.media || [];
+    const audioFile = req.files.audio ? req.files.audio[0] : null;
     
-    if (!payload || files.length === 0) {
+    if (!payload || mediaFiles.length === 0) {
         return res.status(400).send('Dados da timeline ou ficheiros em falta.');
     }
 
-    const allTempFiles = files.map(f => f.path);
+    let allTempFiles = mediaFiles.map(f => f.path);
+    if (audioFile) allTempFiles.push(audioFile.path);
     
     try {
         const data = JSON.parse(payload);
         const { clips, settings } = data;
 
-        // Mapeia os ficheiros recebidos para garantir a ordem correta da timeline
-        const filesByName = files.reduce((acc, file) => {
+        const filesByName = mediaFiles.reduce((acc, file) => {
             acc[file.originalname] = file.path;
             return acc;
         }, {});
@@ -338,7 +342,6 @@ app.post('/render-timeline', upload.array('media'), async (req, res) => {
                 await runFFmpeg(command);
                 videoClips.push(outputPath);
             } else {
-                // Opcional: Re-encodar vídeos para normalizar
                 const outputPath = path.join(processedDir, `clip-${i}.mp4`);
                 allTempFiles.push(outputPath);
                 const command = `ffmpeg -i "${filePath}" -c:v libx264 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -an -y "${outputPath}"`;
@@ -347,36 +350,57 @@ app.post('/render-timeline', upload.array('media'), async (req, res) => {
             }
         }
 
-        // Etapa 2: Unir os clipes com transições ou preparar o clipe único
-const finalOutputPath = path.join(processedDir, `timeline-final-${Date.now()}.mp4`);
-allTempFiles.push(finalOutputPath);
+        // Etapa 2: Unir os clipes com transições
+        const silentVideoPath = path.join(processedDir, `timeline-silent-${Date.now()}.mp4`);
+        allTempFiles.push(silentVideoPath);
+        
+        if (videoClips.length === 1) {
+            fs.renameSync(videoClips[0], silentVideoPath);
+        } else {
+            const inputs = videoClips.map(p => `-i "${p}"`).join(' ');
+            let filterComplex = '';
+            videoClips.forEach((p, i) => { filterComplex += `[${i}:v]settb=1/25,fps=25[v${i}];`; });
+            for (let i = 0; i < videoClips.length - 1; i++) {
+                const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
+                const input2 = `[v${i+1}]`;
+                const output = `[vt${i}]`;
+                filterComplex += `${input1}${input2}xfade=transition=${settings.transition || 'fade'}:duration=1:offset=${(i+1)*5 - 1}${output};`;
+            }
+            const lastOutput = `[vt${videoClips.length - 2}]`;
+            await runFFmpeg(`ffmpeg ${inputs} -filter_complex "${filterComplex}" -map "${lastOutput}" -c:v libx264 -pix_fmt yuv420p -y "${silentVideoPath}"`);
+        }
+        
+        // Etapa 3: Adicionar Áudio e Legendas
+        let finalVideoPath = silentVideoPath;
+        let finalOutputPath = path.join(processedDir, `timeline-final-${Date.now()}.mp4`);
+        allTempFiles.push(finalOutputPath);
 
-if (videoClips.length === 1) {
-    // CORREÇÃO: Em vez de copiar, apenas renomeia o ficheiro existente.
-    // Isto é mais rápido e evita o erro.
-    fs.renameSync(videoClips[0], finalOutputPath);
-} else {
-    // Constrói um comando FFmpeg complexo com o filtro 'xfade' para transições
-    const inputs = videoClips.map((p, i) => `-i "${p}"`).join(' ');
-    let filterComplex = '';
-    // Prepara cada clipe
-    videoClips.forEach((p, i) => {
-        filterComplex += `[${i}:v]settb=1/25,fps=25[v${i}];`;
-    });
-    // Aplica as transições
-    for (let i = 0; i < videoClips.length - 1; i++) {
-        const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
-        const input2 = `[v${i+1}]`;
-        const output = `[vt${i}]`;
-        // Cada clipe tem 5s, a transição começa no 4º segundo
-        filterComplex += `${input1}${input2}xfade=transition=${settings.transition || 'fade'}:duration=1:offset=${(i+1)*5 - 1}${output};`;
-    }
-    const lastOutput = `[vt${videoClips.length - 2}]`;
+        let command = `ffmpeg -i "${silentVideoPath}"`;
+        let audioMap = "-map 0:v:0";
+        let audioCodec = "-c:v copy";
 
-    await runFFmpeg(`ffmpeg ${inputs} -filter_complex "${filterComplex}" -map "${lastOutput}" -c:v libx264 -pix_fmt yuv420p -y "${finalOutputPath}"`);
-}
-        // Etapa 3: Enviar o vídeo final
-        res.sendFile(finalOutputPath, (err) => {
+        // Adiciona áudio de fundo se existir
+        if (audioFile) {
+            command += ` -i "${audioFile.path}"`;
+            audioMap += " -map 1:a:0";
+            audioCodec += " -c:a aac -shortest";
+        }
+        
+        // Adiciona legendas se existirem
+        if (settings.subtitles) {
+            const srtPath = path.join(uploadDir, `subtitles-${Date.now()}.srt`);
+            allTempFiles.push(srtPath);
+            // Cria um ficheiro SRT simples (uma legenda a cobrir o vídeo todo)
+            fs.writeFileSync(srtPath, `1\n00:00:00,000 --> 00:10:00,000\n${settings.subtitles}`);
+            command += ` -vf "subtitles='${srtPath.replace(/\\/g, '/')}'"`;
+        }
+
+        command += ` ${audioMap} ${audioCodec} -y "${finalOutputPath}"`;
+        await runFFmpeg(command);
+        finalVideoPath = finalOutputPath;
+
+        // Etapa 4: Enviar o vídeo final
+        res.sendFile(finalVideoPath, (err) => {
             if (err) console.error('Erro ao enviar vídeo:', err);
             safeDeleteFiles(allTempFiles);
         });
@@ -1239,6 +1263,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
