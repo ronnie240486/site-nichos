@@ -1,18 +1,32 @@
 const express = require('express');
 const multer = require('multer');
+const cors = require('cors');
 const ffmpeg = require('fluent-ffmpeg');
 const path = require('path');
 const fs = require('fs');
 const fetch = require('node-fetch');
 
 const app = express();
-app.use(express.json());
+const PORT = process.env.PORT || 10000;
 
-const UPLOAD_DIR = 'uploads';
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
+const uploadDir = path.join(__dirname, 'uploads');
+const processedDir = path.join(__dirname, 'processed');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
-const upload = multer({ dest: UPLOAD_DIR });
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use('/downloads', express.static(processedDir));
 
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadDir),
+    filename: (req, file, cb) => {
+      const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+      cb(null, `${Date.now()}-${safeOriginalName}`);
+    }
+  })
+});
 // Função para baixar vídeo de URL
 async function downloadVideo(url, destPath) {
   const res = await fetch(url);
@@ -1351,6 +1365,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
