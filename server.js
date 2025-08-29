@@ -1,3 +1,5 @@
+// server.js
+
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
@@ -6,60 +8,56 @@ const path = require('path');
 const fs = require('fs');
 const fetch = require('node-fetch');
 
+// ==========================
+// Configuração do servidor
+// ==========================
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 10000;
 
 // Diretórios
 const uploadDir = path.join(__dirname, 'uploads');
 const processedDir = path.join(__dirname, 'processed');
-
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
+// ==========================
 // Middlewares
+// ==========================
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use('/downloads', express.static(processedDir));
 
-// Multer
+// ==========================
+// Multer - configuração de upload
+// ==========================
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir),
     filename: (req, file, cb) => {
-      const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-      cb(null, `${Date.now()}-${safeName}`);
-    },
-  }),
+      const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+      cb(null, `${Date.now()}-${safeOriginalName}`);
+    }
+  })
 });
 
-// Função para baixar vídeo de URL
+// ==========================
+// Função para baixar vídeos via URL
+// ==========================
 async function downloadVideo(url, destPath) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Falha ao baixar vídeo: ${url}`);
   const fileStream = fs.createWriteStream(destPath);
   await new Promise((resolve, reject) => {
     res.body.pipe(fileStream);
-    res.body.on('error', reject);
-    fileStream.on('finish', resolve);
+    res.body.on("error", reject);
+    fileStream.on("finish", resolve);
   });
   return destPath;
 }
 
-// Função auxiliar para remover arquivos temporários
-function safeDeleteFiles(files) {
-  files.forEach(f => {
-    if (f && fs.existsSync(f)) {
-      try {
-        fs.unlinkSync(f);
-        console.log(`Arquivo temporário removido: ${f}`);
-      } catch (e) {
-        console.error(`Erro ao deletar ${f}:`, e);
-      }
-    }
-  });
-}
-
-// Endpoint /render-timeline
+// ==========================
+// Endpoint POST /render-timeline
+// ==========================
 app.post('/render-timeline', upload.array('videos'), async (req, res) => {
   try {
     console.log('Payload JSON:', req.body);
@@ -67,42 +65,45 @@ app.post('/render-timeline', upload.array('videos'), async (req, res) => {
 
     let videoPaths = [];
 
-    // 1️⃣ Arquivos enviados via upload
-    if (req.files?.length) {
-      videoPaths.push(...req.files.map(f => f.path));
+    // 1️⃣ arquivos enviados pelo upload
+    if (req.files && req.files.length > 0) {
+      videoPaths = req.files.map(f => f.path);
     }
 
-    // 2️⃣ URLs enviadas via JSON
-    if (req.body.videos?.length) {
+    // 2️⃣ vídeos via JSON (URLs ou caminhos locais)
+    if (req.body.videos && req.body.videos.length > 0) {
       for (const video of req.body.videos) {
         if (video.startsWith('http')) {
           const fileName = path.join(uploadDir, `${Date.now()}-${path.basename(video)}`);
           await downloadVideo(video, fileName);
           videoPaths.push(fileName);
         } else {
-          if (!fs.existsSync(video))
+          if (!fs.existsSync(video)) {
             return res.status(400).json({ error: `Vídeo não encontrado: ${video}` });
+          }
           videoPaths.push(video);
         }
       }
     }
 
-    if (!videoPaths.length) {
+    if (videoPaths.length === 0) {
       return res.status(400).json({ error: 'Nenhum vídeo fornecido' });
     }
 
-    const outputPath = path.join(processedDir, `timeline-${Date.now()}.mp4`);
-
-    // Monta comando FFmpeg
+    // ==========================
+    // Comando FFmpeg
+    // ==========================
     let command = ffmpeg();
-    videoPaths.forEach(v => (command = command.input(v)));
+    videoPaths.forEach(video => command = command.input(video));
 
     const videoInputs = videoPaths.map((_, i) => `[${i}:v:0]`).join('');
     const audioInputs = videoPaths.map((_, i) => `[${i}:a:0]`).join('');
     const filterComplex = [
       `${videoInputs}concat=n=${videoPaths.length}:v=1:a=0[v]`,
-      `${audioInputs}concat=n=${videoPaths.length}:v=0:a=1[a]`,
+      `${audioInputs}concat=n=${videoPaths.length}:v=0:a=1[a]`
     ];
+
+    const outputPath = path.join(uploadDir, `timeline-${Date.now()}.mp4`);
 
     command
       .complexFilter(filterComplex, ['v', 'a'])
@@ -111,29 +112,32 @@ app.post('/render-timeline', upload.array('videos'), async (req, res) => {
       .on('error', (err, stdout, stderr) => {
         console.error('Erro FFmpeg:', err.message);
         console.error('FFmpeg stderr:', stderr);
-        safeDeleteFiles(videoPaths);
         return res.status(500).json({ error: 'Erro ao processar vídeo', details: err.message });
       })
       .on('end', () => {
         console.log('Renderização concluída:', outputPath);
-        safeDeleteFiles(videoPaths);
-        res.download(outputPath, 'timeline-output.mp4', err => {
+        res.download(outputPath, 'timeline-output.mp4', (err) => {
           if (err) console.error('Erro ao enviar arquivo:', err);
-          safeDeleteFiles([outputPath]);
+          fs.unlinkSync(outputPath);
         });
       })
       .save(outputPath);
+
   } catch (err) {
     console.error('Erro no endpoint:', err);
-    return res.status(500).json({ error: 'Erro interno no servidor', details: err.message });
+    res.status(500).json({ error: 'Erro interno no servidor', details: err.message });
   }
 });
 
-// Rotas simples
+// ==========================
+// Rotas de teste
+// ==========================
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
 
+// ==========================
 // Inicia servidor
+// ==========================
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
@@ -1369,6 +1373,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
