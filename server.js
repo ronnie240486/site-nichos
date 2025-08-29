@@ -115,14 +115,7 @@ app.listen(8080, () => {
 });
 
 
-// 2. Configuração Inicial
-const app = express();
-const PORT = process.env.PORT || 10000;
 
-const uploadDir = path.join(__dirname, 'uploads');
-const processedDir = path.join(__dirname, 'processed');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
 // 3. Middlewares
 app.use(cors());
@@ -1368,6 +1361,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
