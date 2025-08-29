@@ -7,7 +7,7 @@ const fs = require('fs');
 const fetch = require('node-fetch');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 8080;
 
 // Diretórios
 const uploadDir = path.join(__dirname, 'uploads');
@@ -1369,6 +1369,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
