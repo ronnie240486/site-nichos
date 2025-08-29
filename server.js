@@ -1,5 +1,4 @@
 // server.js
-
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
@@ -8,11 +7,8 @@ const path = require('path');
 const fs = require('fs');
 const fetch = require('node-fetch');
 
-// ==========================
-// Configuração do servidor
-// ==========================
 const app = express();
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 10000; // Porta dinâmica para deploy
 
 // Diretórios
 const uploadDir = path.join(__dirname, 'uploads');
@@ -20,16 +16,12 @@ const processedDir = path.join(__dirname, 'processed');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
-// ==========================
 // Middlewares
-// ==========================
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use('/downloads', express.static(processedDir));
 
-// ==========================
-// Multer - configuração de upload
-// ==========================
+// Multer
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir),
@@ -40,9 +32,7 @@ const upload = multer({
   })
 });
 
-// ==========================
-// Função para baixar vídeos via URL
-// ==========================
+// Função para baixar vídeo de URL
 async function downloadVideo(url, destPath) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Falha ao baixar vídeo: ${url}`);
@@ -55,22 +45,17 @@ async function downloadVideo(url, destPath) {
   return destPath;
 }
 
-// ==========================
 // Endpoint POST /render-timeline
-// ==========================
 app.post('/render-timeline', upload.array('videos'), async (req, res) => {
   try {
-    console.log('Payload JSON:', req.body);
-    console.log('Arquivos enviados:', req.files);
-
     let videoPaths = [];
 
-    // 1️⃣ arquivos enviados pelo upload
+    // Uploads físicos
     if (req.files && req.files.length > 0) {
       videoPaths = req.files.map(f => f.path);
     }
 
-    // 2️⃣ vídeos via JSON (URLs ou caminhos locais)
+    // Vídeos via JSON (URLs ou caminhos locais)
     if (req.body.videos && req.body.videos.length > 0) {
       for (const video of req.body.videos) {
         if (video.startsWith('http')) {
@@ -90,9 +75,7 @@ app.post('/render-timeline', upload.array('videos'), async (req, res) => {
       return res.status(400).json({ error: 'Nenhum vídeo fornecido' });
     }
 
-    // ==========================
     // Comando FFmpeg
-    // ==========================
     let command = ffmpeg();
     videoPaths.forEach(video => command = command.input(video));
 
@@ -129,18 +112,15 @@ app.post('/render-timeline', upload.array('videos'), async (req, res) => {
   }
 });
 
-// ==========================
-// Rotas de teste
-// ==========================
+// Rotas simples de teste
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
 
-// ==========================
-// Inicia servidor
-// ==========================
+// Inicia servidor (apenas 1 vez!)
 app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
 });
+
 
 
 
@@ -1373,6 +1353,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
