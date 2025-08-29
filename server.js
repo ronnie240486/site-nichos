@@ -1,128 +1,38 @@
-// server.js
+// 1. Importação de Módulos
 const express = require('express');
 const multer = require('multer');
-const cors = require('cors');
-const ffmpeg = require('fluent-ffmpeg');
+const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const cors = require('cors');
+const archiver = require('archiver');
+const { SpeechClient } = require('@google-cloud/speech');
 const fetch = require('node-fetch');
+const FormData = require('form-data');
 
+// 2. Configuração Inicial
 const app = express();
-const PORT = process.env.PORT || 10000; // Porta dinâmica para deploy
+const PORT = process.env.PORT || 10000;
 
-// Diretórios
 const uploadDir = path.join(__dirname, 'uploads');
 const processedDir = path.join(__dirname, 'processed');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
-// Middlewares
+// 3. Middlewares
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use('/downloads', express.static(processedDir));
 
-// Multer
-const upload = multer({
-  storage: multer.diskStorage({
+const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir),
     filename: (req, file, cb) => {
-      const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-      cb(null, `${Date.now()}-${safeOriginalName}`);
+        const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+        cb(null, `${Date.now()}-${safeOriginalName}`);
     }
-  })
 });
 
-// Função para baixar vídeo de URL
-async function downloadVideo(url, destPath) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Falha ao baixar vídeo: ${url}`);
-  const fileStream = fs.createWriteStream(destPath);
-  await new Promise((resolve, reject) => {
-    res.body.pipe(fileStream);
-    res.body.on("error", reject);
-    fileStream.on("finish", resolve);
-  });
-  return destPath;
-}
-
-// Endpoint POST /render-timeline
-app.post('/render-timeline', upload.array('videos'), async (req, res) => {
-  try {
-    let videoPaths = [];
-
-    // Uploads físicos
-    if (req.files && req.files.length > 0) {
-      videoPaths = req.files.map(f => f.path);
-    }
-
-    // Vídeos via JSON (URLs ou caminhos locais)
-    if (req.body.videos && req.body.videos.length > 0) {
-      for (const video of req.body.videos) {
-        if (video.startsWith('http')) {
-          const fileName = path.join(uploadDir, `${Date.now()}-${path.basename(video)}`);
-          await downloadVideo(video, fileName);
-          videoPaths.push(fileName);
-        } else {
-          if (!fs.existsSync(video)) {
-            return res.status(400).json({ error: `Vídeo não encontrado: ${video}` });
-          }
-          videoPaths.push(video);
-        }
-      }
-    }
-
-    if (videoPaths.length === 0) {
-      return res.status(400).json({ error: 'Nenhum vídeo fornecido' });
-    }
-
-    // Comando FFmpeg
-    let command = ffmpeg();
-    videoPaths.forEach(video => command = command.input(video));
-
-    const videoInputs = videoPaths.map((_, i) => `[${i}:v:0]`).join('');
-    const audioInputs = videoPaths.map((_, i) => `[${i}:a:0]`).join('');
-    const filterComplex = [
-      `${videoInputs}concat=n=${videoPaths.length}:v=1:a=0[v]`,
-      `${audioInputs}concat=n=${videoPaths.length}:v=0:a=1[a]`
-    ];
-
-    const outputPath = path.join(uploadDir, `timeline-${Date.now()}.mp4`);
-
-    command
-      .complexFilter(filterComplex, ['v', 'a'])
-      .outputOptions(['-map [v]', '-map [a]'])
-      .on('start', cmdLine => console.log('Comando FFmpeg:', cmdLine))
-      .on('error', (err, stdout, stderr) => {
-        console.error('Erro FFmpeg:', err.message);
-        console.error('FFmpeg stderr:', stderr);
-        return res.status(500).json({ error: 'Erro ao processar vídeo', details: err.message });
-      })
-      .on('end', () => {
-        console.log('Renderização concluída:', outputPath);
-        res.download(outputPath, 'timeline-output.mp4', (err) => {
-          if (err) console.error('Erro ao enviar arquivo:', err);
-          fs.unlinkSync(outputPath);
-        });
-      })
-      .save(outputPath);
-
-  } catch (err) {
-    console.error('Erro no endpoint:', err);
-    res.status(500).json({ error: 'Erro interno no servidor', details: err.message });
-  }
-});
-
-// Rotas simples de teste
-app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
-app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
-
-// Inicia servidor (apenas 1 vez!)
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
-
-
-
+const upload = multer({ storage: storage });
 
 // 4. Funções Auxiliares
 function runFFmpeg(command) {
@@ -1353,15 +1263,6 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
 
 
 
