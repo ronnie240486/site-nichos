@@ -9,15 +9,18 @@ const fetch = require('node-fetch');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// Diretórios
 const uploadDir = path.join(__dirname, 'uploads');
 const processedDir = path.join(__dirname, 'processed');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 
+// Middlewares
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use('/downloads', express.static(processedDir));
 
+// Multer
 const upload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir),
@@ -28,9 +31,7 @@ const upload = multer({
   })
 });
 
-// Função para baixar vídeo e endpoint /render-timeline aqui...
-
-// Função para baixar vídeo de URL
+// Função para baixar vídeo
 async function downloadVideo(url, destPath) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Falha ao baixar vídeo: ${url}`);
@@ -43,7 +44,7 @@ async function downloadVideo(url, destPath) {
   return destPath;
 }
 
-// Endpoint POST /render-timeline
+// Endpoint /render-timeline
 app.post('/render-timeline', upload.array('videos'), async (req, res) => {
   try {
     console.log('Payload JSON:', req.body);
@@ -84,7 +85,7 @@ app.post('/render-timeline', upload.array('videos'), async (req, res) => {
       `${audioInputs}concat=n=${videoPaths.length}:v=0:a=1[a]`
     ];
 
-    const outputPath = path.join(UPLOAD_DIR, `timeline-${Date.now()}.mp4`);
+    const outputPath = path.join(uploadDir, `timeline-${Date.now()}.mp4`);
 
     command
       .complexFilter(filterComplex, ['v', 'a'])
@@ -110,27 +111,11 @@ app.post('/render-timeline', upload.array('videos'), async (req, res) => {
   }
 });
 
-app.listen(8080, () => {
-  console.log('Servidor rodando na porta 8080');
+// Inicia servidor
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
 });
 
-
-
-
-// 3. Middlewares
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use('/downloads', express.static(processedDir));
-
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadDir),
-    filename: (req, file, cb) => {
-        const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-        cb(null, `${Date.now()}-${safeOriginalName}`);
-    }
-});
-
-const upload = multer({ storage: storage });
 
 // 4. Funções Auxiliares
 function runFFmpeg(command) {
@@ -1361,6 +1346,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
