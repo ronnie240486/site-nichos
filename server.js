@@ -27,6 +27,9 @@ const upload = multer({
     }
   })
 });
+
+// Função para baixar vídeo e endpoint /render-timeline aqui...
+
 // Função para baixar vídeo de URL
 async function downloadVideo(url, destPath) {
   const res = await fetch(url);
@@ -1365,6 +1368,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
