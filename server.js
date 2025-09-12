@@ -1405,55 +1405,67 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
     });
 
     
-app.post("/extrair-audio", (req, res) => {
-  console.log("Recebido body:", req.body);
+// Rota para extrair áudio do YouTube
+app.post("/extrair-audio", async (req, res) => {
+  try {
+    console.log("Recebido body:", req.body);
 
-  const { url } = req.body;
-
-  if (!url || typeof url !== "string") {
-    console.error("URL ausente ou inválida");
-    return res.status(400).json({ error: "URL não fornecida ou inválida" });
-  }
-
-  const jobId = Date.now();
-
-  // Executa em background para não travar a requisição HTTP
-  setImmediate(async () => {
-    try {
-      const info = await youtubedl(url, {
-        extractAudio: true,        // Extrai apenas áudio
-        audioFormat: "mp3",        // Formato de saída
-        dumpSingleJson: true,      // Retorna informações do vídeo
-        addHeader: [
-          "referer:youtube.com",
-          "user-agent:googlebot"
-        ]
-      });
-
-      console.log(`Job ${jobId} finalizado:`, info.title);
-
-      // Aqui você poderia:
-      // - salvar o arquivo de áudio em storage
-      // - atualizar o status do job em um banco de dados
-
-    } catch (err) {
-      console.error(`Erro no job ${jobId}:`, err);
+    // Validação básica do body
+    if (!req.body) {
+      return res.status(400).json({ error: "Body vazio" });
     }
-  });
 
-  // Responde imediatamente ao cliente
-  res.json({
-    success: true,
-    jobId,
-    message: "Processamento iniciado em background"
-  });
+    const { url } = req.body;
+
+    if (!url || typeof url !== "string") {
+      return res.status(400).json({ error: "URL não fornecida ou inválida" });
+    }
+
+    const jobId = Date.now();
+
+    // Processamento em background
+    setImmediate(async () => {
+      try {
+        console.log(`IA Turbo: Iniciando processamento do job ${jobId} para URL: ${url}`);
+
+        const info = await youtubedl(url, {
+          extractAudio: true,        // Extrai apenas áudio
+          audioFormat: "mp3",        // Formato de saída
+          dumpSingleJson: true,      // Retorna informações do vídeo
+          addHeader: [
+            "referer:youtube.com",
+            "user-agent:googlebot"
+          ]
+        });
+
+        console.log(`Job ${jobId} finalizado com sucesso:`, info.title);
+
+        // Aqui você poderia:
+        // - salvar o arquivo de áudio em storage
+        // - atualizar o status do job em um banco de dados
+      } catch (err) {
+        console.error(`Erro no job ${jobId}:`, err);
+      }
+    });
+
+    // Responde imediatamente ao cliente
+    res.json({
+      success: true,
+      jobId,
+      message: "Processamento iniciado em background"
+    });
+
+  } catch (err) {
+    console.error("Erro crítico na rota /extrair-audio:", err);
+    res.status(500).json({ error: "Falha ao processar requisição" });
+  }
 });
-
 
 // 6. Iniciar Servidor
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
