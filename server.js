@@ -9,6 +9,7 @@ const archiver = require('archiver');
 const { SpeechClient } = require('@google-cloud/speech');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
+const ytdl = require('ytdl-core'); // Adicionado para download do YouTube
 
 // 2. Configuração Inicial
 const app = express();
@@ -48,6 +49,19 @@ function runFFmpeg(command) {
     });
 }
 
+function getMediaDuration(filePath) {
+    return new Promise((resolve, reject) => {
+        const command = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`;
+        exec(command, (error, stdout, stderr) => {
+            if (error) {
+                return reject(new Error(`Erro no ffprobe: ${stderr}`));
+            }
+            resolve(parseFloat(stdout));
+        });
+    });
+}
+
+
 function safeDeleteFiles(files) {
     files.forEach(f => {
         if (f && fs.existsSync(f)) {
@@ -60,6 +74,31 @@ function safeDeleteFiles(files) {
         }
     });
 }
+
+function sendZipResponse(res, filesToZip, allTempFiles) {
+    if (filesToZip.length === 1) {
+        res.sendFile(filesToZip[0].path, (err) => {
+            if (err) console.error('Erro ao enviar ficheiro:', err);
+            safeDeleteFiles(allTempFiles);
+        });
+    } else {
+        const zipPath = path.join(processedDir, `resultado-${Date.now()}.zip`);
+        const output = fs.createWriteStream(zipPath);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+
+        output.on('close', () => {
+            res.sendFile(zipPath, (err) => {
+                if (err) console.error('Erro ao enviar zip:', err);
+                safeDeleteFiles([...allTempFiles, zipPath]);
+            });
+        });
+        archive.on('error', (err) => { throw err; });
+        archive.pipe(output);
+        filesToZip.forEach(f => archive.file(f.path, { name: f.name }));
+        archive.finalize();
+    }
+}
+
 
 function pcmToWavBuffer(pcmData, sampleRate) {
     const numChannels = 1;
@@ -538,86 +577,6 @@ app.post('/separar-faixas', upload.array('videos'), async (req, res) => {
     }
 });
 
-// --- FIM DO CÓDIGO ADICIONADO ---
-// ROTA CORRIGIDA PARA GERAR MÚSICA COM REPLICATE (ASSÍNCRONA)
-app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
-    const allTempFiles = (req.files || []).map(f => f.path);
-    try {
-        const { descricao } = req.body;
-        const replicateApiKey = req.headers['x-replicate-api-key']; // Esperamos que o frontend envie a chave no header
-
-        if (!descricao) {
-            return res.status(400).send('A descrição da música é obrigatória.');
-        }
-        if (!replicateApiKey) {
-            return res.status(400).send('A chave da API da Replicate não foi fornecida.');
-        }
-
-        console.log(`Iniciando geração de música para: "${descricao}"`);
-
-        // Etapa 1: Iniciar a predição na Replicate
-        const startResponse = await fetch("https://api.replicate.com/v1/predictions", {
-            method: "POST",
-            headers: {
-                "Authorization": `Token ${replicateApiKey}`,
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                version: "8cf61ea6c56afd61d8f5b9ffd14d7c216c0a93844ce2d82ac1c9ecc9c7f24e05", // Versão do modelo MusicGen
-                input: {
-                    model_version: "stereo-large",
-                    prompt: descricao,
-                    duration: 10 // Duração em segundos (pode ajustar)
-                },
-            }),
-        });
-
-        const prediction = await startResponse.json();
-        if (startResponse.status !== 201) {
-            throw new Error(prediction.detail || "Falha ao iniciar a geração na Replicate.");
-        }
-
-        let predictionUrl = prediction.urls.get;
-        let generatedMusicUrl = null;
-
-        // Etapa 2: Verificar o estado da predição até estar concluída
-        while (!generatedMusicUrl) {
-            console.log("A verificar o estado da geração...");
-            await new Promise(resolve => setTimeout(resolve, 3000)); // Espera 3 segundos
-
-            const statusResponse = await fetch(predictionUrl, {
-                headers: { "Authorization": `Token ${replicateApiKey}` },
-            });
-            const statusResult = await statusResponse.json();
-
-            if (statusResult.status === "succeeded") {
-                generatedMusicUrl = statusResult.output;
-                break;
-            } else if (statusResult.status === "failed") {
-                throw new Error("A geração da música falhou na Replicate.");
-            }
-        }
-
-        console.log("Música gerada com sucesso:", generatedMusicUrl);
-
-        // Etapa 3: Fazer o download da música gerada e enviá-la ao utilizador
-        const musicResponse = await fetch(generatedMusicUrl);
-        if (!musicResponse.ok) {
-            throw new Error("Falha ao fazer o download da música gerada.");
-        }
-
-        res.setHeader('Content-Type', 'audio/mpeg');
-        musicResponse.body.pipe(res);
-
-    } catch (error) {
-        console.error('Erro ao gerar música:', error);
-        safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) {
-            res.status(500).send(`Erro interno ao gerar a música: ${error.message}`);
-        }
-    }
-});
-
 // --- ROTA PARA CLONAGEM DE VOZ (ELEVENLABS) ---
 app.post('/clonar-voz', upload.single('audio'), async (req, res) => {
     const audioFile = req.file;
@@ -1005,48 +964,143 @@ app.post('/gerar-logo', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTAS DO IA TURBO ---
+// --- ROTA DE INPAINTING (STABILITY AI) ---
+app.post('/inpainting', upload.fields([
+    { name: 'image', maxCount: 1 },
+    { name: 'mask', maxCount: 1 }
+]), async (req, res) => {
+    const imageFile = req.files.image?.[0];
+    const maskFile = req.files.mask?.[0];
+    const { prompt } = req.body;
+    const allTempFiles = [imageFile?.path, maskFile?.path].filter(Boolean);
 
-app.post('/extrair-audio', upload.any(), async (req, res) => {
-    const files = req.files || [];
-    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+    if (!imageFile || !maskFile || !prompt) {
+        safeDeleteFiles(allTempFiles);
+        return res.status(400).send("Ficheiro de imagem, máscara e prompt são necessários.");
+    }
 
-    // Rota IA Turbo (single file, fieldname 'video')
-    if (files.length === 1 && files[0].fieldname === 'video') {
-        const file = files[0];
-        const allTempFiles = [file.path];
-        try {
-            const outputPath = path.join(processedDir, `audio-ext-${Date.now()}.wav`);
-            allTempFiles.push(outputPath);
-            await runFFmpeg(`ffmpeg -i "${file.path}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y "${outputPath}"`);
-            res.sendFile(outputPath, (err) => {
-                if (err) console.error('Erro ao enviar ficheiro de áudio:', err);
-                safeDeleteFiles(allTempFiles);
-            });
-        } catch (e) {
-            safeDeleteFiles(allTempFiles);
-            res.status(500).send(e.message);
+    try {
+        const stabilityApiKey = req.headers['x-stability-api-key'];
+        if (!stabilityApiKey) {
+            throw new Error("A chave da API da Stability AI não foi fornecida.");
         }
-    } 
-    // Rota Ferramenta Genérica (multiple files, fieldname 'videos')
-    else {
-        const allTempFiles = files.map(f => f.path);
-        try {
-            const processedFiles = [];
-            for (const file of files) {
-                const outputFilename = `${path.parse(file.filename).name}.mp3`;
-                const outputPath = path.join(processedDir, `extraido-${outputFilename}`);
-                allTempFiles.push(outputPath);
-                await runFFmpeg(`ffmpeg -i "${file.path}" -vn -q:a 0 -map a -y "${outputPath}"`);
-                processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
-            }
-            sendZipResponse(res, processedFiles, allTempFiles);
-        } catch (e) {
+
+        const formData = new FormData();
+        formData.append('init_image', fs.createReadStream(imageFile.path));
+        formData.append('mask_image', fs.createReadStream(maskFile.path));
+        formData.append('mask_source', 'MASK_IMAGE_WHITE');
+        formData.append('text_prompts[0][text]', prompt);
+        formData.append('samples', 1);
+
+        const response = await fetch("https://api.stability.ai/v1/generation/stable-inpainting-v1-0/image-to-image/masking", {
+            method: 'POST',
+            headers: { ...formData.getHeaders(), 'Authorization': `Bearer ${stabilityApiKey}` },
+            body: formData,
+        });
+
+        if (!response.ok) {
+            throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`);
+        }
+
+        res.setHeader('Content-Type', 'image/png');
+        response.body.pipe(res);
+
+        res.on('finish', () => {
             safeDeleteFiles(allTempFiles);
-            res.status(500).send(e.message);
+        });
+
+    } catch (error) {
+        console.error("Erro no Inpainting:", error);
+        safeDeleteFiles(allTempFiles);
+        if (!res.headersSent) {
+            res.status(500).send(`Erro interno no Inpainting: ${error.message}`);
         }
     }
 });
+
+
+// --- ROTAS DO IA TURBO ---
+
+// ** ROTA MODIFICADA PARA ACEITAR URL **
+app.post('/extrair-audio', upload.single('video'), async (req, res) => {
+    let videoPath = null;
+    let isTempFile = false;
+    
+    try {
+        if (req.file) {
+            console.log('IA Turbo: Processando ficheiro de vídeo carregado...');
+            videoPath = req.file.path;
+        } else if (req.body.url) {
+            const videoUrl = req.body.url;
+            console.log(`IA Turbo: Processando URL de vídeo: ${videoUrl}`);
+            
+            if (!ytdl.validateURL(videoUrl)) {
+                return res.status(400).send('URL do YouTube inválido.');
+            }
+
+            videoPath = path.join(uploadDir, `download_${Date.now()}.mp4`);
+            isTempFile = true;
+            
+            await new Promise((resolve, reject) => {
+                ytdl(videoUrl, { filter: 'audioandvideo', quality: 'highest' })
+                    .pipe(fs.createWriteStream(videoPath))
+                    .on('finish', resolve)
+                    .on('error', reject);
+            });
+            console.log('Download do URL concluído.');
+        } else {
+            // Verifica se é uma requisição da ferramenta genérica
+            const files = req.files || [];
+            if (files.length > 0 && files[0].fieldname === 'videos') {
+                 // Deixa a lógica da ferramenta genérica tratar disto (simulando um 'next()')
+                 return extrairAudioGenerico(req, res);
+            }
+            return res.status(400).send('Nenhum ficheiro ou URL enviado.');
+        }
+
+        // Processamento de áudio para IA Turbo
+        const outputPath = path.join(processedDir, `audio-ext-${Date.now()}.wav`);
+        const allTempFiles = [videoPath, outputPath];
+
+        await runFFmpeg(`ffmpeg -i "${videoPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y "${outputPath}"`);
+        
+        res.sendFile(outputPath, (err) => {
+            if (err) console.error('Erro ao enviar ficheiro de áudio:', err);
+            // Apaga o ficheiro de vídeo temporário apenas se foi descarregado
+            if (isTempFile) {
+                safeDeleteFiles([videoPath]);
+            }
+            safeDeleteFiles([outputPath]); // O ficheiro de upload original é apagado pelo multer
+        });
+
+    } catch (e) {
+        if (isTempFile && videoPath) {
+             safeDeleteFiles([videoPath]);
+        }
+        res.status(500).send(e.message);
+    }
+});
+
+// Função separada para a lógica da ferramenta genérica
+async function extrairAudioGenerico(req, res) {
+    const files = req.files || [];
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const processedFiles = [];
+        for (const file of files) {
+            const outputFilename = `${path.parse(file.filename).name}.mp3`;
+            const outputPath = path.join(processedDir, `extraido-${outputFilename}`);
+            allTempFiles.push(outputPath);
+            await runFFmpeg(`ffmpeg -i "${file.path}" -vn -q:a 0 -map a -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+}
+
 
 app.post('/transcrever-audio', upload.fields([
     { name: 'audio', maxCount: 1 },
@@ -1089,24 +1143,52 @@ app.post('/transcrever-audio', upload.fields([
     }
 });
 
+// ** ROTA MODIFICADA PARA ACEITAR URL **
 app.post('/extrair-frames', upload.single('video'), async (req, res) => {
-    const file = req.file;
-    if (!file) return res.status(400).send('Nenhum ficheiro de vídeo enviado.');
+    let videoPath = null;
+    let isTempFile = false;
+    let allTempFiles = [];
 
-    const allTempFiles = [file.path];
     try {
+        if (req.file) {
+            console.log('IA Turbo: Extraindo frames do ficheiro carregado...');
+            videoPath = req.file.path;
+            allTempFiles.push(videoPath);
+        } else if (req.body.url) {
+            const videoUrl = req.body.url;
+            console.log(`IA Turbo: Extraindo frames do URL: ${videoUrl}`);
+            
+            if (!ytdl.validateURL(videoUrl)) {
+                return res.status(400).send('URL do YouTube inválido.');
+            }
+
+            videoPath = path.join(uploadDir, `download_frames_${Date.now()}.mp4`);
+            isTempFile = true;
+            allTempFiles.push(videoPath);
+            
+            await new Promise((resolve, reject) => {
+                ytdl(videoUrl, { filter: 'audioandvideo', quality: 'highest' })
+                    .pipe(fs.createWriteStream(videoPath))
+                    .on('finish', resolve)
+                    .on('error', reject);
+            });
+            console.log('Download do URL para frames concluído.');
+        } else {
+            return res.status(400).send('Nenhum ficheiro ou URL enviado.');
+        }
+        
         const uniquePrefix = `frame-${Date.now()}`;
         const outputPattern = path.join(processedDir, `${uniquePrefix}-%03d.png`);
         
         const sceneDetectionThreshold = 0.4;
-        await runFFmpeg(`ffmpeg -i "${file.path}" -vf "select='gt(scene,${sceneDetectionThreshold})'" -vsync vfr -y "${outputPattern}"`);
+        await runFFmpeg(`ffmpeg -i "${videoPath}" -vf "select='gt(scene,${sceneDetectionThreshold})'" -vsync vfr -y "${outputPattern}"`);
         
         let frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
         allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
 
         if (frameFiles.length === 0) {
             console.log("Nenhuma mudança de cena detectada. Extraindo frames a cada 5 segundos.");
-            await runFFmpeg(`ffmpeg -i "${file.path}" -vf fps=1/5 -y "${outputPattern}"`);
+            await runFFmpeg(`ffmpeg -i "${videoPath}" -vf fps=1/5 -y "${outputPattern}"`);
             frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
             allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
         }
@@ -1118,12 +1200,23 @@ app.post('/extrair-frames', upload.single('video'), async (req, res) => {
         });
         
         res.json({ frames: base64Frames });
+
     } catch (e) {
         res.status(500).send(e.message);
     } finally {
         safeDeleteFiles(allTempFiles);
     }
 });
+
+function getEffectFilter(transition, duration, dValue, width, height) {
+    switch (transition) {
+        case 'frei0r.filter.blackwhite': return `frei0r=filter_name=blackwhite`;
+        // ... adicione casos para todos os 100+ filtros
+        default: // Ken Burns como padrão
+            return `zoompan=z='min(zoom+0.001,1.1)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
+    }
+}
+
 
 app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, res) => {
     const narrationFile = req.file;
@@ -1259,69 +1352,8 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
     }
 });
 
+
 // 6. Iniciar Servidor
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
