@@ -1403,12 +1403,12 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
         res.status(500).send(e.message);
     }
 
-app.post("/extrair-audio", async (req, res) => {
+app.post("/extrair-audio", (req, res) => {
   const { url } = req.body;
-
-  // Cria job em background
   const jobId = Date.now();
-  process.nextTick(async () => {
+
+  // Executa em background
+  setImmediate(async () => {
     try {
       const info = await youtubedl(url, {
         extractAudio: true,
@@ -1416,22 +1416,24 @@ app.post("/extrair-audio", async (req, res) => {
         dumpSingleJson: true,
         addHeader: ["referer:youtube.com", "user-agent:googlebot"]
       });
-      // Aqui você poderia salvar o arquivo ou enviar para storage
       console.log(`Job ${jobId} finalizado`, info.title);
+      // Aqui você poderia salvar em storage e atualizar status do job
     } catch (err) {
       console.error(`Erro no job ${jobId}:`, err);
     }
   });
 
-  // Resposta imediata ao cliente
+  // Resposta imediata
   res.json({ success: true, jobId, message: "Processamento iniciado em background" });
 });
+
 
 
 // 6. Iniciar Servidor
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
