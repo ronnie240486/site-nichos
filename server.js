@@ -1407,15 +1407,27 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 // ========================================
 app.post("/extrair-audio", async (req, res) => {
   const { url } = req.body;
-  try {
-    const info = await youtubedl(url, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      preferFreeFormats: true,
-      extractAudio: true,
-      audioFormat: "mp3",
-      addHeader: ["referer:youtube.com", "user-agent:googlebot"]
-    });
+
+  // Cria job em background (simulação)
+  const jobId = Date.now();
+  process.nextTick(async () => {
+    try {
+      const info = await youtubedl(url, {
+        extractAudio: true,
+        audioFormat: "mp3",
+        dumpSingleJson: true,
+        addHeader: ["referer:youtube.com", "user-agent:googlebot"]
+      });
+      // Aqui você poderia salvar o arquivo ou enviar para storage
+      console.log(`Job ${jobId} finalizado`, info.title);
+    } catch (err) {
+      console.error(`Erro no job ${jobId}:`, err);
+    }
+  });
+
+  res.json({ success: true, jobId, message: "Processamento iniciado em background" });
+});
+
 
     // Retorna link/infos do áudio gerado ou caminho temporário
     res.json({ success: true, info });
@@ -1430,6 +1442,7 @@ app.post("/extrair-audio", async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
