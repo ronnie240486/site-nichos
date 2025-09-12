@@ -9,7 +9,6 @@ const archiver = require('archiver');
 const { SpeechClient } = require('@google-cloud/speech');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
-const ytdl = require('ytdl-core'); // Adicionado para download do YouTube
 const youtubedl = require("youtube-dl-exec"); // Adicionado para a nova rota
 
 // 2. Configuração Inicial
@@ -1410,6 +1409,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
