@@ -9,7 +9,7 @@ const archiver = require('archiver');
 const { SpeechClient } = require('@google-cloud/speech');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
-const youtubedl = require("youtube-dl-exec"); // Adicionado para a nova rota
+const youtubedl = require("youtube-dl-exec");
 
 // 2. Configuração Inicial
 const app = express();
@@ -1405,35 +1405,46 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
     });
 
     
-// Rota para extrair áudio do YouTube
 app.post("/extrair-audio", (req, res) => {
   const { url } = req.body;
   const jobId = Date.now();
 
-  // Executa em background
+  // Executa em background para não travar a requisição HTTP
   setImmediate(async () => {
     try {
       const info = await youtubedl(url, {
-        extractAudio: true,
-        audioFormat: "mp3",
-        dumpSingleJson: true,
-        addHeader: ["referer:youtube.com", "user-agent:googlebot"]
+        extractAudio: true,        // Extrai apenas áudio
+        audioFormat: "mp3",        // Formato de saída
+        dumpSingleJson: true,      // Retorna informações do vídeo
+        addHeader: [
+          "referer:youtube.com",
+          "user-agent:googlebot"
+        ]
       });
+
       console.log(`Job ${jobId} finalizado`, info.title);
-      // Aqui você poderia salvar em storage e atualizar status do job
+
+      // Aqui você poderia:
+      // - salvar o arquivo de áudio em storage
+      // - atualizar o status do job em um banco de dados
+
     } catch (err) {
       console.error(`Erro no job ${jobId}:`, err);
     }
   });
 
-  // Resposta imediata
-  res.json({ success: true, jobId, message: "Processamento iniciado em background" });
+  // Responde imediatamente ao cliente
+  res.json({
+    success: true,
+    jobId,
+    message: "Processamento iniciado em background"
+  });
 });
-
 
 
 // 6. Iniciar Servidor
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
