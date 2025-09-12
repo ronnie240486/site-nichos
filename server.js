@@ -1433,11 +1433,3 @@ app.post("/extrair-audio", (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
-
-
-
-
-
-
-
-
