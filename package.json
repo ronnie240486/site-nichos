@@ -7,7 +7,12 @@
     "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["video", "ffmpeg", "timeline", "AI"],
+  "keywords": [
+    "video",
+    "ffmpeg",
+    "timeline",
+    "AI"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -20,3 +25,4 @@
     "node-fetch": "^2.7.0"
   }
 }
+
