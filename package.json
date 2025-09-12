@@ -23,7 +23,7 @@
     "@google-cloud/speech": "^6.5.0",
     "node-fetch": "^2.7.0",
     "form-data": "^4.0.0",
-    "ytdl-core": "latest"
+    "youtube-dl-exec": "^3.0.2"
   }
 }
 
