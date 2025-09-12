@@ -1402,7 +1402,10 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
         safeDeleteFiles(allTempFiles);
         res.status(500).send(e.message);
     }
+    });
 
+    
+// Rota para extrair áudio do YouTube
 app.post("/extrair-audio", (req, res) => {
   const { url } = req.body;
   const jobId = Date.now();
@@ -1433,3 +1436,4 @@ app.post("/extrair-audio", (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
