@@ -1403,12 +1403,10 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
         res.status(500).send(e.message);
     }
 
-// Rota para extrair áudio do YouTube
-// ========================================
 app.post("/extrair-audio", async (req, res) => {
   const { url } = req.body;
 
-  // Cria job em background (simulação)
+  // Cria job em background
   const jobId = Date.now();
   process.nextTick(async () => {
     try {
@@ -1425,16 +1423,8 @@ app.post("/extrair-audio", async (req, res) => {
     }
   });
 
+  // Resposta imediata ao cliente
   res.json({ success: true, jobId, message: "Processamento iniciado em background" });
-});
-
-
-    // Retorna link/infos do áudio gerado ou caminho temporário
-    res.json({ success: true, info });
-  } catch (err) {
-    console.error("Erro ao extrair áudio:", err);
-    res.status(500).json({ error: "Falha ao processar áudio" });
-  }
 });
 
 
@@ -1442,6 +1432,7 @@ app.post("/extrair-audio", async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
