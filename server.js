@@ -10,6 +10,7 @@ const { SpeechClient } = require('@google-cloud/speech');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
 const ytdl = require('ytdl-core'); // Adicionado para download do YouTube
+const youtubedl = require("youtube-dl-exec"); // Adicionado para a nova rota
 
 // 2. Configuração Inicial
 const app = express();
@@ -1018,6 +1019,32 @@ app.post('/inpainting', upload.fields([
     }
 });
 
+// Rota para processar URL do YouTube
+app.post("/download", async (req, res) => {
+  try {
+    const { url } = req.body;
+    console.log("Processando URL:", url);
+
+    // Executa o yt-dlp para pegar informações do vídeo
+    const output = await youtubedl(url, {
+      dumpSingleJson: true,
+      noWarnings: true,
+      preferFreeFormats: true,
+      addHeader: ["referer:youtube.com", "user-agent:googlebot"]
+    });
+
+    res.json({
+      title: output.title,
+      duration: output.duration,
+      url: url,
+      formats: output.formats // aqui você pode escolher o que servir
+    });
+  } catch (err) {
+    console.error("Erro no download:", err);
+    res.status(500).json({ error: "Falha ao processar o vídeo" });
+  }
+});
+
 
 // --- ROTAS DO IA TURBO ---
 
@@ -1357,3 +1384,5 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
+
