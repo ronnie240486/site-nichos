@@ -9,7 +9,8 @@ const archiver = require('archiver');
 const { SpeechClient } = require('@google-cloud/speech');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
-const youtubedl = require("youtube-dl-exec");
+// CORREÇÃO: Removemos o ytdl-core e usamos apenas o youtube-dl-exec
+const youtubedl = require("youtube-dl-exec"); 
 
 // 2. Configuração Inicial
 const app = express();
@@ -129,8 +130,7 @@ app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
 
 // --- ROTAS DE FERRAMENTAS GERAIS ---
-
-// Ferramentas de Vídeo
+// (Todas as rotas de ferramentas gerais como /cortar-video, /unir-videos, etc. permanecem inalteradas)
 app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
@@ -341,39 +341,23 @@ app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
-// --- ROTA PARA O EDITOR DE VÍDEO COM TIMELINE ---
-app.post('/render-timeline', upload.fields([
-    { name: 'media' }, 
-    { name: 'audio', maxCount: 1 }
-]), async (req, res) => {
+
+app.post('/render-timeline', upload.fields([ { name: 'media' }, { name: 'audio', maxCount: 1 } ]), async (req, res) => {
     const { payload } = req.body;
     const mediaFiles = req.files.media || [];
     const audioFile = req.files.audio ? req.files.audio[0] : null;
-    
-    if (!payload || mediaFiles.length === 0) {
-        return res.status(400).send('Dados da timeline ou ficheiros em falta.');
-    }
-
+    if (!payload || mediaFiles.length === 0) { return res.status(400).send('Dados da timeline ou ficheiros em falta.'); }
     let allTempFiles = mediaFiles.map(f => f.path);
     if (audioFile) allTempFiles.push(audioFile.path);
-    
     try {
         const data = JSON.parse(payload);
         const { clips, settings } = data;
-
-        const filesByName = mediaFiles.reduce((acc, file) => {
-            acc[file.originalname] = file.path;
-            return acc;
-        }, {});
+        const filesByName = mediaFiles.reduce((acc, file) => { acc[file.originalname] = file.path; return acc; }, {});
         const orderedFilePaths = clips.map(clip => filesByName[clip.originalName]);
-
         const videoClips = [];
-
-        // Etapa 1: Garante que tudo são vídeos (converte imagens)
         for (let i = 0; i < orderedFilePaths.length; i++) {
             const filePath = orderedFilePaths[i];
             const clipInfo = clips[i];
-            
             if (clipInfo.type === 'image') {
                 const outputPath = path.join(processedDir, `clip-${i}.mp4`);
                 allTempFiles.push(outputPath);
@@ -388,11 +372,8 @@ app.post('/render-timeline', upload.fields([
                 videoClips.push(outputPath);
             }
         }
-
-        // Etapa 2: Unir os clipes com transições
         const silentVideoPath = path.join(processedDir, `timeline-silent-${Date.now()}.mp4`);
         allTempFiles.push(silentVideoPath);
-        
         if (videoClips.length === 1) {
             fs.renameSync(videoClips[0], silentVideoPath);
         } else {
@@ -408,168 +389,83 @@ app.post('/render-timeline', upload.fields([
             const lastOutput = `[vt${videoClips.length - 2}]`;
             await runFFmpeg(`ffmpeg ${inputs} -filter_complex "${filterComplex}" -map "${lastOutput}" -c:v libx264 -pix_fmt yuv420p -y "${silentVideoPath}"`);
         }
-        
-        // Etapa 3: Adicionar Áudio e Legendas
         let finalVideoPath = silentVideoPath;
         let finalOutputPath = path.join(processedDir, `timeline-final-${Date.now()}.mp4`);
         allTempFiles.push(finalOutputPath);
-
         let command = `ffmpeg -i "${silentVideoPath}"`;
         let audioMap = "-map 0:v:0";
         let audioCodec = "-c:v copy";
-
-        // Adiciona áudio de fundo se existir
         if (audioFile) {
             command += ` -i "${audioFile.path}"`;
             audioMap += " -map 1:a:0";
             audioCodec += " -c:a aac -shortest";
         }
-        
-        // Adiciona legendas se existirem
         if (settings.subtitles) {
             const srtPath = path.join(uploadDir, `subtitles-${Date.now()}.srt`);
             allTempFiles.push(srtPath);
-            // Cria um ficheiro SRT simples (uma legenda a cobrir o vídeo todo)
             fs.writeFileSync(srtPath, `1\n00:00:00,000 --> 00:10:00,000\n${settings.subtitles}`);
             command += ` -vf "subtitles='${srtPath.replace(/\\/g, '/')}'"`;
         }
-
         command += ` ${audioMap} ${audioCodec} -y "${finalOutputPath}"`;
         await runFFmpeg(command);
         finalVideoPath = finalOutputPath;
-
-        // Etapa 4: Enviar o vídeo final
         res.sendFile(finalVideoPath, (err) => {
             if (err) console.error('Erro ao enviar vídeo:', err);
             safeDeleteFiles(allTempFiles);
         });
-
     } catch (error) {
         console.error('Erro em /render-timeline:', error);
         safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) {
-            res.status(500).send(`Erro ao processar a timeline: ${error.message}`);
-        }
+        if (!res.headersSent) { res.status(500).send(`Erro ao processar a timeline: ${error.message}`); }
     }
 });
 
-// ROTA REAL PARA GERAR MÚSICA COM REPLICATE (ASSÍNCRONA)
 app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
-    // Limpa ficheiros de upload que não são usados nesta rota
     const allTempFiles = (req.files || []).map(f => f.path);
-    
     try {
         const { descricao } = req.body;
-        // Pega a chave da API que o frontend envia no cabeçalho
         const replicateApiKey = req.headers['x-replicate-api-key']; 
-
-        if (!descricao) {
-            return res.status(400).send('A descrição da música é obrigatória.');
-        }
-        if (!replicateApiKey) {
-            return res.status(400).send('A chave da API da Replicate não foi fornecida.');
-        }
-
+        if (!descricao) { return res.status(400).send('A descrição da música é obrigatória.'); }
+        if (!replicateApiKey) { return res.status(400).send('A chave da API da Replicate não foi fornecida.'); }
         console.log(`Iniciando geração de música para: "${descricao}"`);
-
-        // Etapa 1: Iniciar a predição na Replicate
         const startResponse = await fetch("https://api.replicate.com/v1/predictions", {
-            method: "POST",
-            headers: {
-                "Authorization": `Token ${replicateApiKey}`,
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                // Versão do modelo MusicGen da Meta
-                version: "8cf61ea6c56afd61d8f5b9ffd14d7c216c0a93844ce2d82ac1c9ecc9c7f24e05", 
-                input: {
-                    model_version: "stereo-large",
-                    prompt: descricao,
-                    duration: 10 // Duração em segundos (pode ajustar)
-                },
-            }),
+            method: "POST", headers: { "Authorization": `Token ${replicateApiKey}`, "Content-Type": "application/json", },
+            body: JSON.stringify({ version: "8cf61ea6c56afd61d8f5b9ffd14d7c216c0a93844ce2d82ac1c9ecc9c7f24e05", input: { model_version: "stereo-large", prompt: descricao, duration: 10 }, }),
         });
-
         const prediction = await startResponse.json();
-        if (startResponse.status !== 201) {
-            throw new Error(prediction.detail || "Falha ao iniciar a geração na Replicate.");
-        }
-
+        if (startResponse.status !== 201) { throw new Error(prediction.detail || "Falha ao iniciar a geração na Replicate."); }
         let predictionUrl = prediction.urls.get;
         let generatedMusicUrl = null;
-
-        // Etapa 2: Verificar o estado da predição até estar concluída
         while (!generatedMusicUrl) {
             console.log("A verificar o estado da geração...");
-            // Espera 3 segundos entre cada verificação para não sobrecarregar a API
             await new Promise(resolve => setTimeout(resolve, 3000)); 
-
-            const statusResponse = await fetch(predictionUrl, {
-                headers: { "Authorization": `Token ${replicateApiKey}` },
-            });
+            const statusResponse = await fetch(predictionUrl, { headers: { "Authorization": `Token ${replicateApiKey}` }, });
             const statusResult = await statusResponse.json();
-
-            if (statusResult.status === "succeeded") {
-                generatedMusicUrl = statusResult.output;
-                break;
-            } else if (statusResult.status === "failed") {
-                throw new Error("A geração da música falhou na Replicate.");
-            }
-            // Se ainda estiver "starting" ou "processing", o loop continua
+            if (statusResult.status === "succeeded") { generatedMusicUrl = statusResult.output; break; } 
+            else if (statusResult.status === "failed") { throw new Error("A geração da música falhou na Replicate."); }
         }
-
         console.log("Música gerada com sucesso:", generatedMusicUrl);
-
-        // Etapa 3: Fazer o download da música gerada e enviá-la ao utilizador
         const musicResponse = await fetch(generatedMusicUrl);
-        if (!musicResponse.ok) {
-            throw new Error("Falha ao fazer o download da música gerada.");
-        }
-
-        // Envia o áudio diretamente para o navegador do utilizador
+        if (!musicResponse.ok) { throw new Error("Falha ao fazer o download da música gerada."); }
         res.setHeader('Content-Type', 'audio/mpeg');
         musicResponse.body.pipe(res);
-
     } catch (error) {
         console.error('Erro ao gerar música:', error);
-        // Garante que os ficheiros temporários são limpos em caso de erro
         safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) {
-            res.status(500).send(`Erro interno ao gerar a música: ${error.message}`);
-        }
+        if (!res.headersSent) { res.status(500).send(`Erro interno ao gerar a música: ${error.message}`); }
     }
 });
 
 app.post('/separar-faixas', upload.array('videos'), async (req, res) => {
-    // Usamos 'upload.array('videos')' para manter a consistência com as outras rotas
     const files = req.files || [];
-    if (files.length === 0) {
-        return res.status(400).send('Nenhum ficheiro de áudio enviado.');
-    }
-
+    if (files.length === 0) { return res.status(400).send('Nenhum ficheiro de áudio enviado.'); }
     const allTempFiles = files.map(f => f.path);
     try {
         const processedFiles = [];
-        for (const file of files) {
-            console.log(`Processando separação de faixas para: ${file.filename}`);
-
-            // ===================================================================
-            // AQUI VAI A SUA LÓGICA DE IA PARA SEPARAR AS FAIXAS
-            // 1. Use uma ferramenta como Spleeter ou Demucs.
-            // 2. Processe o ficheiro de áudio salvo em 'file.path'.
-            // 3. O resultado serão vários ficheiros (vocais.mp3, instrumental.mp3, etc.).
-            // 4. Adicione os caminhos desses ficheiros a 'processedFiles'.
-            // Ex: processedFiles.push({ path: 'caminho/para/vocais.mp3', name: 'vocais.mp3' });
-            // ===================================================================
-        }
-
-        // Exemplo de resposta (substitua pela lógica real)
+        for (const file of files) { console.log(`Processando separação de faixas para: ${file.filename}`); }
         console.log("Faixas separadas com sucesso (simulação).");
-        // Quando a lógica estiver pronta, use sendZipResponse para enviar os ficheiros separados
-        // sendZipResponse(res, processedFiles, allTempFiles);
         safeDeleteFiles(allTempFiles);
         res.status(501).send("Lógica de separação de faixas ainda não implementada no backend.");
-
     } catch (error) {
         console.error('Erro ao separar faixas:', error);
         safeDeleteFiles(allTempFiles);
@@ -577,67 +473,34 @@ app.post('/separar-faixas', upload.array('videos'), async (req, res) => {
     }
 });
 
-// --- ROTA PARA CLONAGEM DE VOZ (ELEVENLABS) ---
 app.post('/clonar-voz', upload.single('audio'), async (req, res) => {
     const audioFile = req.file;
     const { text } = req.body;
     const allTempFiles = [audioFile?.path].filter(Boolean);
-
-    if (!audioFile || !text) {
-        safeDeleteFiles(allTempFiles);
-        return res.status(400).send('Faltam a amostra de áudio ou o texto.');
-    }
-
+    if (!audioFile || !text) { safeDeleteFiles(allTempFiles); return res.status(400).send('Faltam a amostra de áudio ou o texto.'); }
     try {
         const elevenlabsApiKey = process.env.ELEVENLABS_API_KEY || req.headers['x-elevenlabs-api-key'];
-        if (!elevenlabsApiKey) {
-            throw new Error("A chave da API da ElevenLabs não está configurada.");
-        }
-
+        if (!elevenlabsApiKey) { throw new Error("A chave da API da ElevenLabs não está configurada."); }
         console.log("Iniciando processo de clonagem de voz...");
-
-        // Etapa 1: Adicionar a voz à sua conta ElevenLabs
         const formData = new FormData();
         formData.append('name', `VozClonada_${Date.now()}`);
         formData.append('files', fs.createReadStream(audioFile.path), audioFile.originalname);
-
-        const addVoiceResponse = await fetch("https://api.elevenlabs.io/v1/voices/add", {
-            method: 'POST',
-            headers: { 'xi-api-key': elevenlabsApiKey },
-            body: formData,
-        });
-
+        const addVoiceResponse = await fetch("https://api.elevenlabs.io/v1/voices/add", { method: 'POST', headers: { 'xi-api-key': elevenlabsApiKey }, body: formData, });
         if (!addVoiceResponse.ok) throw new Error(`API da ElevenLabs (Add Voice) retornou um erro: ${await addVoiceResponse.text()}`);
         const { voice_id } = await addVoiceResponse.json();
         console.log("Voz temporária criada com ID:", voice_id);
-
-        // Etapa 2: Gerar o áudio com a nova voz
         const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voice_id}/stream`, {
-            method: 'POST',
-            headers: { 'xi-api-key': elevenlabsApiKey, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                text: text,
-                model_id: "eleven_multilingual_v2",
-                voice_settings: { stability: 0.5, similarity_boost: 0.75 }
-            }),
+            method: 'POST', headers: { 'xi-api-key': elevenlabsApiKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text, model_id: "eleven_multilingual_v2", voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
         });
-
         if (!ttsResponse.ok) throw new Error(`API da ElevenLabs (TTS) retornou um erro: ${await ttsResponse.text()}`);
-
-        // Etapa 3: Enviar o áudio de volta e apagar a voz temporária
         res.setHeader('Content-Type', 'audio/mpeg');
         ttsResponse.body.pipe(res);
-
-        // Apaga a voz clonada após o envio para não encher a sua conta
         res.on('finish', async () => {
             console.log("A apagar a voz temporária:", voice_id);
-            await fetch(`https://api.elevenlabs.io/v1/voices/${voice_id}`, {
-                method: 'DELETE',
-                headers: { 'xi-api-key': elevenlabsApiKey }
-            });
+            await fetch(`https://api.elevenlabs.io/v1/voices/${voice_id}`, { method: 'DELETE', headers: { 'xi-api-key': elevenlabsApiKey } });
             safeDeleteFiles(allTempFiles);
         });
-
     } catch (error) {
         console.error('Erro no processo de clonagem de voz:', error);
         safeDeleteFiles(allTempFiles);
@@ -645,79 +508,44 @@ app.post('/clonar-voz', upload.single('audio'), async (req, res) => {
     }
 });
 
-// --- ROTA PARA GERADOR DE EFEITOS SONOROS (REPLICATE) ---
 app.post('/gerar-sfx', upload.none(), async (req, res) => {
     const { prompt } = req.body;
-    if (!prompt) {
-        return res.status(400).send('A descrição do efeito sonoro é obrigatória.');
-    }
-
+    if (!prompt) { return res.status(400).send('A descrição do efeito sonoro é obrigatória.'); }
     try {
         const replicateApiKey = req.headers['x-replicate-api-key'];
-        if (!replicateApiKey) {
-            throw new Error("A chave da API da Replicate não foi fornecida.");
-        }
-
+        if (!replicateApiKey) { throw new Error("A chave da API da Replicate não foi fornecida."); }
         console.log(`Iniciando geração de SFX para: "${prompt}"`);
-
-        // Etapa 1: Iniciar a predição na Replicate
         const startResponse = await fetch("https://api.replicate.com/v1/predictions", {
-            method: "POST",
-            headers: { "Authorization": `Token ${replicateApiKey}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-                version: "b05b1dff1d8c6ac63d424224fe93a2e79c5689a8b653e7a41da33e5737e4558e", // Modelo AudioGen
-                input: {
-                    text: prompt,
-                    duration: 5 // Duração em segundos
-                },
-            }),
+            method: "POST", headers: { "Authorization": `Token ${replicateApiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ version: "b05b1dff1d8c6ac63d424224fe93a2e79c5689a8b653e7a41da33e5737e4558e", input: { text: prompt, duration: 5 }, }),
         });
-
         const prediction = await startResponse.json();
         if (startResponse.status !== 201) throw new Error(prediction.detail || "Falha ao iniciar a geração na Replicate.");
-
         let predictionUrl = prediction.urls.get;
         let generatedSfxUrl = null;
-
-        // Etapa 2: Verificar o estado da predição
         while (!generatedSfxUrl) {
             console.log("A verificar o estado da geração de SFX...");
             await new Promise(resolve => setTimeout(resolve, 3000));
             const statusResponse = await fetch(predictionUrl, { headers: { "Authorization": `Token ${replicateApiKey}` } });
             const statusResult = await statusResponse.json();
-            if (statusResult.status === "succeeded") {
-                generatedSfxUrl = statusResult.output;
-                break;
-            } else if (statusResult.status === "failed") {
-                throw new Error("A geração do SFX falhou na Replicate.");
-            }
+            if (statusResult.status === "succeeded") { generatedSfxUrl = statusResult.output; break; } 
+            else if (statusResult.status === "failed") { throw new Error("A geração do SFX falhou na Replicate."); }
         }
-
         console.log("SFX gerado com sucesso:", generatedSfxUrl);
-
-        // Etapa 3: Fazer o download e enviar ao utilizador
         const sfxResponse = await fetch(generatedSfxUrl);
         if (!sfxResponse.ok) throw new Error("Falha ao fazer o download do SFX gerado.");
-
         res.setHeader('Content-Type', 'audio/wav');
         sfxResponse.body.pipe(res);
-
     } catch (error) {
         console.error('Erro ao gerar SFX:', error);
         if (!res.headersSent) res.status(500).send(`Erro interno ao gerar SFX: ${error.message}`);
     }
 });
 
-// --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA E FINAL) ---
-app.post('/workflow-magico-avancado', upload.fields([
-    { name: 'logo', maxCount: 1 },
-    { name: 'intro', maxCount: 1 },
-    { name: 'outro', maxCount: 1 }
-]), async (req, res) => {
+app.post('/workflow-magico-avancado', upload.fields([ { name: 'logo', maxCount: 1 }, { name: 'intro', maxCount: 1 }, { name: 'outro', maxCount: 1 } ]), async (req, res) => {
     const { topic, settings: settingsStr } = req.body;
     const settings = JSON.parse(settingsStr);
     let allTempFiles = [];
-
     try {
         const logoFile = req.files.logo?.[0];
         const introFile = req.files.intro?.[0];
@@ -725,58 +553,36 @@ app.post('/workflow-magico-avancado', upload.fields([
         if(logoFile) allTempFiles.push(logoFile.path);
         if(introFile) allTempFiles.push(introFile.path);
         if(outroFile) allTempFiles.push(outroFile.path);
-
         const geminiApiKey = req.headers['x-gemini-api-key'];
         const pexelsApiKey = req.headers['x-pexels-api-key'];
         const stabilityApiKey = req.headers['x-stability-api-key'];
         const openaiApiKey = req.headers['x-openai-api-key'];
-
-        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey || !openaiApiKey) {
-            throw new Error("Todas as chaves de API (Gemini, Pexels, Stability, OpenAI) são necessárias.");
-        }
-
+        if (!geminiApiKey || !pexelsApiKey || !stabilityApiKey || !openaiApiKey) { throw new Error("Todas as chaves de API (Gemini, Pexels, Stability, OpenAI) são necessárias."); }
         console.log(`[Workflow Avançado] Iniciado para o tópico: "${topic}"`);
-
-        // --- Etapa 1: Gerar Roteiro ---
         console.log("[Workflow] Etapa 1/8: A gerar roteiro...");
         const scriptPrompt = `Crie um roteiro para um vídeo curto (40-60 segundos) sobre "${topic}". O roteiro deve ser envolvente, informativo e dividido em frases curtas. Responda APENAS com o texto do roteiro.`;
-        const scriptResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: scriptPrompt }] }] })
-        });
+        const scriptResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: scriptPrompt }] }] }) });
         if (!scriptResponse.ok) throw new Error("Falha ao gerar o roteiro.");
         const scriptData = await scriptResponse.json();
         const script = scriptData.candidates[0].content.parts[0].text.trim();
-
-        // --- Etapa 2: Gerar Narração com Timestamps ---
         console.log("[Workflow] Etapa 2/8: A gerar narração...");
-        const narrationResponse = await fetch(`https://api.openai.com/v1/audio/speech`, {
-            method: 'POST', headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'tts-1-hd', voice: 'alloy', input: script, response_format: 'mp3' })
-        });
+        const narrationResponse = await fetch(`https://api.openai.com/v1/audio/speech`, { method: 'POST', headers: { 'Authorization': `Bearer ${openaiApiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'tts-1-hd', voice: 'alloy', input: script, response_format: 'mp3' }) });
         if (!narrationResponse.ok) throw new Error(`Falha ao gerar a narração: ${await narrationResponse.text()}`);
         const narrationBuffer = await narrationResponse.buffer();
         const narrationPath = path.join(uploadDir, `narration-${Date.now()}.mp3`);
         fs.writeFileSync(narrationPath, narrationBuffer);
         allTempFiles.push(narrationPath);
-
-        // --- Etapa 3: Analisar Cenas ---
         console.log("[Workflow] Etapa 3/8: A analisar cenas...");
         const scenesPrompt = `Analise este roteiro e divida-o em 5 a 8 cenas visuais. Para cada cena, forneça um termo de busca conciso e em inglês para encontrar um vídeo de stock. Retorne um array de objetos JSON. Exemplo: [{"cena": 1, "termo_busca": "person meditating peacefully"}, ...]. Roteiro: "${script}"`;
-        const scenesResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: scenesPrompt }] }], generationConfig: { responseMimeType: "application/json" } })
-        });
+        const scenesResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: scenesPrompt }] }], generationConfig: { responseMimeType: "application/json" } }) });
         if (!scenesResponse.ok) throw new Error("Falha ao analisar as cenas.");
         const scenesData = await scenesResponse.json();
         const scenes = JSON.parse(scenesData.candidates[0].content.parts[0].text);
-
-        // --- Etapa 4: Busca de Mídia Híbrida ---
         console.log("[Workflow] Etapa 4/8: A buscar mídias (híbrido)...");
         const downloadPromises = scenes.map(async (scene) => {
             const pexelsResponse = await fetch(`https://api.pexels.com/videos/search?query=${encodeURIComponent(scene.termo_busca)}&per_page=1&orientation=landscape`, { headers: { 'Authorization': pexelsApiKey } });
             const pexelsData = await pexelsResponse.json();
             const videoUrl = pexelsData.videos?.[0]?.video_files?.find(f => f.quality === 'hd')?.link;
-            
             if (videoUrl) {
                 const videoPath = path.join(uploadDir, `scene-${scene.cena}.mp4`);
                 const videoRes = await fetch(videoUrl);
@@ -785,17 +591,13 @@ app.post('/workflow-magico-avancado', upload.fields([
                 return videoPath;
             } else {
                 console.log(`Nenhum vídeo encontrado para "${scene.termo_busca}". A gerar imagem com IA...`);
-                const stabilityResponse = await fetch("https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image", {
-                    method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` },
-                    body: JSON.stringify({ text_prompts: [{ text: `${scene.termo_busca}, cinematic, high detail` }], steps: 30, width: 1920, height: 1080 })
-                });
+                const stabilityResponse = await fetch("https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image", { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` }, body: JSON.stringify({ text_prompts: [{ text: `${scene.termo_busca}, cinematic, high detail` }], steps: 30, width: 1920, height: 1080 }) });
                 if (!stabilityResponse.ok) return null;
                 const stabilityData = await stabilityResponse.json();
                 const imageBase64 = stabilityData.artifacts[0].base64;
                 const imagePath = path.join(uploadDir, `scene-img-${scene.cena}.png`);
                 fs.writeFileSync(imagePath, Buffer.from(imageBase64, 'base64'));
                 allTempFiles.push(imagePath);
-                
                 const videoPath = path.join(uploadDir, `scene-vid-${scene.cena}.mp4`);
                 const kenburnsEffect = settings.kenburns ? `,zoompan=z='min(zoom+0.001,1.1)':d=125:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'` : '';
                 await runFFmpeg(`ffmpeg -loop 1 -i "${imagePath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080${kenburnsEffect}" -y "${videoPath}"`);
@@ -805,18 +607,11 @@ app.post('/workflow-magico-avancado', upload.fields([
         const mediaPaths = (await Promise.all(downloadPromises)).filter(Boolean);
         allTempFiles.push(...mediaPaths);
         if (mediaPaths.length === 0) throw new Error("Nenhuma mídia pôde ser encontrada ou gerada.");
-
-        // --- Etapa 5: Montagem com Efeitos ---
         console.log("[Workflow] Etapa 5/8: A montar o vídeo com efeitos...");
         const [width, height] = settings.format === '9:16' ? [1080, 1920] : [1920, 1080];
-        
         let filterComplex = '';
-        mediaPaths.forEach((p, i) => {
-            filterComplex += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v${i}];`;
-        });
-        
+        mediaPaths.forEach((p, i) => { filterComplex += `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v${i}];`; });
         let lastVideoOutput;
-        // CORREÇÃO: Lida com o caso de ter apenas 1 clipe de vídeo
         if (mediaPaths.length > 1) {
             for (let i = 0; i < mediaPaths.length - 1; i++) {
                 const input1 = i === 0 ? `[v${i}]` : `[vt${i-1}]`;
@@ -825,10 +620,7 @@ app.post('/workflow-magico-avancado', upload.fields([
                 filterComplex += `${input1}${input2}xfade=transition=${settings.transition}:duration=1:offset=${(i+1)*4}${output};`;
             }
             lastVideoOutput = `[vt${mediaPaths.length - 2}]`;
-        } else {
-            lastVideoOutput = '[v0]'; // Apenas um clipe, sem transição
-        }
-        
+        } else { lastVideoOutput = '[v0]'; }
         if (settings.filter !== 'none') {
             let filterName = '';
             if (settings.filter === 'cinematic') filterName = ',eq=contrast=1.1:saturation=1.2';
@@ -836,21 +628,15 @@ app.post('/workflow-magico-avancado', upload.fields([
             filterComplex += `${lastVideoOutput}${filterName}[v_filtered];`;
             lastVideoOutput = '[v_filtered]';
         }
-
         const silentVideoPath = path.join(processedDir, `silent_complex-${Date.now()}.mp4`);
         allTempFiles.push(silentVideoPath);
-        
         const ffmpegInputs = mediaPaths.map(p => `-i "${p}"`).join(' ');
         const finalMap = lastVideoOutput.includes('[') ? `-map "${lastVideoOutput}"` : `-map "[v0]"`;
         await runFFmpeg(`ffmpeg ${ffmpegInputs} -filter_complex "${filterComplex}" ${finalMap} -c:v libx264 -preset ultrafast -pix_fmt yuv420p -y "${silentVideoPath}"`);
-
-        // --- Etapa 6: Adicionar Áudio ---
         console.log("[Workflow] Etapa 6/8: A adicionar áudio...");
         const audioVideoPath = path.join(processedDir, `audio-video-${Date.now()}.mp4`);
         allTempFiles.push(audioVideoPath);
         await runFFmpeg(`ffmpeg -i "${silentVideoPath}" -i "${narrationPath}" -c:v copy -c:a aac -map 0:v:0 -map 1:a:0 -shortest -y "${audioVideoPath}"`);
-
-        // --- Etapa 7: Adicionar Intro/Outro ---
         let finalVideoPath = audioVideoPath;
         if(introFile || outroFile) {
             console.log("[Workflow] Etapa 7/8: A adicionar Intro/Outro...");
@@ -858,335 +644,172 @@ app.post('/workflow-magico-avancado', upload.fields([
             if(introFile) concatList.push(`file '${introFile.path.replace(/'/g, "'\\''")}'`);
             concatList.push(`file '${audioVideoPath.replace(/'/g, "'\\''")}'`);
             if(outroFile) concatList.push(`file '${outroFile.path.replace(/'/g, "'\\''")}'`);
-
             const concatFilePath = path.join(uploadDir, `concat-list-${Date.now()}.txt`);
             fs.writeFileSync(concatFilePath, concatList.join('\n'));
             allTempFiles.push(concatFilePath);
-
             const finalConcatPath = path.join(processedDir, `final-concat-${Date.now()}.mp4`);
             await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${concatFilePath}" -c copy -y "${finalConcatPath}"`);
             finalVideoPath = finalConcatPath;
-        } else {
-            console.log("[Workflow] Etapa 7/8: A saltar Intro/Outro...");
-        }
-
-        // --- Etapa 8: Gerar Conteúdo Extra ---
+        } else { console.log("[Workflow] Etapa 7/8: A saltar Intro/Outro..."); }
         console.log("[Workflow] Etapa 8/8: A gerar conteúdo extra...");
         const youtubePrompt = `Aja como um especialista em SEO para YouTube. Para um vídeo sobre "${topic}", gere 3 títulos chamativos e uma descrição otimizada com hashtags. Retorne como um objeto JSON com as chaves "titles" (um array de strings) e "description" (uma string).`;
-        const youtubeResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: youtubePrompt }] }], generationConfig: { responseMimeType: "application/json" } })
-        });
+        const youtubeResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${geminiApiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: youtubePrompt }] }], generationConfig: { responseMimeType: "application/json" } }) });
         const youtubeData = await youtubeResponse.json();
         const youtubeContent = JSON.parse(youtubeData.candidates[0].content.parts[0].text);
-
-        // --- Etapa Final: Enviar Resposta Completa ---
         const videoDataUrl = `data:video/mp4;base64,${fs.readFileSync(finalVideoPath).toString('base64')}`;
-        
-        res.json({
-            videoDataUrl: videoDataUrl,
-            thumbnails: [], // A geração de thumbnail é muito complexa, deixamos como placeholder
-            youtubeContent: youtubeContent
-        });
-
+        res.json({ videoDataUrl: videoDataUrl, thumbnails: [], youtubeContent: youtubeContent });
     } catch (error) {
         console.error('Erro no Workflow Mágico Avançado:', error);
         safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) {
-            res.status(500).send(`Erro interno no Workflow Mágico: ${error.message}`);
-        }
+        if (!res.headersSent) { res.status(500).send(`Erro interno no Workflow Mágico: ${error.message}`); }
     }
 });
 
-
-// --- ROTA PARA GERADOR DE LOGOTIPOS (IA) - COM MODELO CORRIGIDO ---
 app.post('/gerar-logo', upload.none(), async (req, res) => {
     const { prompt } = req.body;
-
-    if (!prompt) {
-        return res.status(400).send('A descrição do logotipo é obrigatória.');
-    }
-
+    if (!prompt) { return res.status(400).send('A descrição do logotipo é obrigatória.'); }
     try {
         const stabilityApiKey = process.env.STABILITY_API_KEY || req.headers['x-stability-api-key'];
-        if (!stabilityApiKey) {
-            throw new Error("A chave da API da Stability AI não está configurada.");
-        }
-
+        if (!stabilityApiKey) { throw new Error("A chave da API da Stability AI não está configurada."); }
         console.log("Iniciando geração de logotipos com o prompt:", prompt);
-
-        const payload = {
-            text_prompts: [
-                {
-                    text: `${prompt}, professional logo, vector, minimalist, flat design`
-                }
-            ],
-            cfg_scale: 7,
-            samples: 4,
-            steps: 30,
-            width: 1024,
-            height: 1024,
-        };
-
-        // --- ALTERAÇÃO PRINCIPAL AQUI ---
-        // Trocamos 'stable-diffusion-v1-6' pelo modelo mais recente 'stable-diffusion-xl-1024-v1-0'
-        const response = await fetch(
-            "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image",
-            {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'Authorization': `Bearer ${stabilityApiKey}`
-                },
-                body: JSON.stringify(payload),
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`);
-        }
-
+        const payload = { text_prompts: [ { text: `${prompt}, professional logo, vector, minimalist, flat design` } ], cfg_scale: 7, samples: 4, steps: 30, width: 1024, height: 1024, };
+        const response = await fetch( "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image", { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${stabilityApiKey}` }, body: JSON.stringify(payload), } );
+        if (!response.ok) { throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`); }
         const responseJSON = await response.json();
-        
-        const images = responseJSON.artifacts.map(image => ({
-            base64: image.base64
-        }));
-
+        const images = responseJSON.artifacts.map(image => ({ base64: image.base64 }));
         console.log(`${images.length} logotipos gerados com sucesso.`);
         res.json({ images });
-
     } catch (error) {
         console.error('Erro no processo de geração de logotipos:', error);
-        if (!res.headersSent) {
-            res.status(500).send(`Erro interno na geração de logotipos: ${error.message}`);
-        }
+        if (!res.headersSent) { res.status(500).send(`Erro interno na geração de logotipos: ${error.message}`); }
     }
 });
 
-// --- ROTA DE INPAINTING (STABILITY AI) ---
-app.post('/inpainting', upload.fields([
-    { name: 'image', maxCount: 1 },
-    { name: 'mask', maxCount: 1 }
-]), async (req, res) => {
+app.post('/inpainting', upload.fields([ { name: 'image', maxCount: 1 }, { name: 'mask', maxCount: 1 } ]), async (req, res) => {
     const imageFile = req.files.image?.[0];
     const maskFile = req.files.mask?.[0];
     const { prompt } = req.body;
     const allTempFiles = [imageFile?.path, maskFile?.path].filter(Boolean);
-
-    if (!imageFile || !maskFile || !prompt) {
-        safeDeleteFiles(allTempFiles);
-        return res.status(400).send("Ficheiro de imagem, máscara e prompt são necessários.");
-    }
-
+    if (!imageFile || !maskFile || !prompt) { safeDeleteFiles(allTempFiles); return res.status(400).send("Ficheiro de imagem, máscara e prompt são necessários."); }
     try {
         const stabilityApiKey = req.headers['x-stability-api-key'];
-        if (!stabilityApiKey) {
-            throw new Error("A chave da API da Stability AI não foi fornecida.");
-        }
-
+        if (!stabilityApiKey) { throw new Error("A chave da API da Stability AI não foi fornecida."); }
         const formData = new FormData();
         formData.append('init_image', fs.createReadStream(imageFile.path));
         formData.append('mask_image', fs.createReadStream(maskFile.path));
         formData.append('mask_source', 'MASK_IMAGE_WHITE');
         formData.append('text_prompts[0][text]', prompt);
         formData.append('samples', 1);
-
-        const response = await fetch("https://api.stability.ai/v1/generation/stable-inpainting-v1-0/image-to-image/masking", {
-            method: 'POST',
-            headers: { ...formData.getHeaders(), 'Authorization': `Bearer ${stabilityApiKey}` },
-            body: formData,
-        });
-
-        if (!response.ok) {
-            throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`);
-        }
-
+        const response = await fetch("https://api.stability.ai/v1/generation/stable-inpainting-v1-0/image-to-image/masking", { method: 'POST', headers: { ...formData.getHeaders(), 'Authorization': `Bearer ${stabilityApiKey}` }, body: formData, });
+        if (!response.ok) { throw new Error(`API da Stability AI retornou um erro: ${await response.text()}`); }
         res.setHeader('Content-Type', 'image/png');
         response.body.pipe(res);
-
-        res.on('finish', () => {
-            safeDeleteFiles(allTempFiles);
-        });
-
+        res.on('finish', () => { safeDeleteFiles(allTempFiles); });
     } catch (error) {
         console.error("Erro no Inpainting:", error);
         safeDeleteFiles(allTempFiles);
-        if (!res.headersSent) {
-            res.status(500).send(`Erro interno no Inpainting: ${error.message}`);
-        }
+        if (!res.headersSent) { res.status(500).send(`Erro interno no Inpainting: ${error.message}`); }
     }
 });
 
-// Rota para processar URL do YouTube
 app.post("/download", async (req, res) => {
   try {
     const { url } = req.body;
     console.log("Processando URL:", url);
-
-    // Executa o yt-dlp para pegar informações do vídeo
-    const output = await youtubedl(url, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      preferFreeFormats: true,
-      addHeader: ["referer:youtube.com", "user-agent:googlebot"]
-    });
-
-    res.json({
-      title: output.title,
-      duration: output.duration,
-      url: url,
-      formats: output.formats // aqui você pode escolher o que servir
-    });
+    const output = await youtubedl(url, { dumpSingleJson: true, noWarnings: true, preferFreeFormats: true, addHeader: ["referer:youtube.com", "user-agent:googlebot"] });
+    res.json({ title: output.title, duration: output.duration, url: url, formats: output.formats });
   } catch (err) {
     console.error("Erro no download:", err);
     res.status(500).json({ error: "Falha ao processar o vídeo" });
   }
 });
 
-// Rota para obter informações do vídeo
 app.post("/video-info", async (req, res) => {
   try {
     const { url } = req.body;
     console.log("Processando URL:", url);
-
-    // Obter informações do vídeo
-    const info = await youtubedl(url, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      preferFreeFormats: true,
-      addHeader: ["referer:youtube.com", "user-agent:googlebot"]
-    });
-
-    res.json({
-      title: info.title,
-      duration: info.duration,
-      uploader: info.uploader,
-      formats: info.formats
-    });
+    const info = await youtubedl(url, { dumpSingleJson: true, noWarnings: true, preferFreeFormats: true, addHeader: ["referer:youtube.com", "user-agent:googlebot"] });
+    res.json({ title: info.title, duration: info.duration, uploader: info.uploader, formats: info.formats });
   } catch (err) {
     console.error("Erro ao processar vídeo:", err);
     res.status(500).json({ error: "Falha ao processar o vídeo" });
   }
 });
 
-
 // --- ROTAS DO IA TURBO ---
+// Rota para extrair áudio do YouTube
+app.post("/extrair-audio", async (req, res) => {
+  try {
+    console.log("Recebido body:", req.body);
 
-// ** ROTA MODIFICADA PARA ACEITAR URL **
-app.post('/extrair-audio', upload.single('video'), async (req, res) => {
-    let videoPath = null;
-    let isTempFile = false;
-    
-    try {
-        if (req.file) {
-            console.log('IA Turbo: Processando ficheiro de vídeo carregado...');
-            videoPath = req.file.path;
-        } else if (req.body.url) {
-            const videoUrl = req.body.url;
-            console.log(`IA Turbo: Processando URL de vídeo: ${videoUrl}`);
-            
-            if (!ytdl.validateURL(videoUrl)) {
-                return res.status(400).send('URL do YouTube inválido.');
-            }
+    // Validação básica do body
+    if (!req.body) {
+      return res.status(400).json({ error: "Body vazio" });
+    }
 
-            videoPath = path.join(uploadDir, `download_${Date.now()}.mp4`);
-            isTempFile = true;
-            
-            await new Promise((resolve, reject) => {
-                ytdl(videoUrl, { filter: 'audioandvideo', quality: 'highest' })
-                    .pipe(fs.createWriteStream(videoPath))
-                    .on('finish', resolve)
-                    .on('error', reject);
-            });
-            console.log('Download do URL concluído.');
-        } else {
-            // Verifica se é uma requisição da ferramenta genérica
-            const files = req.files || [];
-            if (files.length > 0 && files[0].fieldname === 'videos') {
-                 // Deixa a lógica da ferramenta genérica tratar disto (simulando um 'next()')
-                 return extrairAudioGenerico(req, res);
-            }
-            return res.status(400).send('Nenhum ficheiro ou URL enviado.');
-        }
+    const { url } = req.body;
 
-        // Processamento de áudio para IA Turbo
-        const outputPath = path.join(processedDir, `audio-ext-${Date.now()}.wav`);
-        const allTempFiles = [videoPath, outputPath];
+    if (!url || typeof url !== "string") {
+      return res.status(400).json({ error: "URL não fornecida ou inválida" });
+    }
 
-        await runFFmpeg(`ffmpeg -i "${videoPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y "${outputPath}"`);
-        
-        res.sendFile(outputPath, (err) => {
-            if (err) console.error('Erro ao enviar ficheiro de áudio:', err);
-            // Apaga o ficheiro de vídeo temporário apenas se foi descarregado
-            if (isTempFile) {
-                safeDeleteFiles([videoPath]);
-            }
-            safeDeleteFiles([outputPath]); // O ficheiro de upload original é apagado pelo multer
-        });
+    const jobId = Date.now();
 
-    } catch (e) {
-        if (isTempFile && videoPath) {
-             safeDeleteFiles([videoPath]);
-        }
-        res.status(500).send(e.message);
-    }
+    // Processamento em background
+    setImmediate(async () => {
+      try {
+        console.log(`IA Turbo: Iniciando processamento do job ${jobId} para URL: ${url}`);
+
+        const info = await youtubedl(url, {
+          extractAudio: true,        // Extrai apenas áudio
+          audioFormat: "mp3",        // Formato de saída
+          dumpSingleJson: true,      // Retorna informações do vídeo
+          addHeader: [
+            "referer:youtube.com",
+            "user-agent:googlebot"
+          ]
+        });
+
+        console.log(`Job ${jobId} finalizado com sucesso:`, info.title);
+
+        // Aqui você poderia:
+        // - salvar o arquivo de áudio em storage
+        // - atualizar o status do job em um banco de dados
+      } catch (err) {
+        console.error(`Erro no job ${jobId}:`, err);
+      }
+    });
+
+    // Responde imediatamente ao cliente
+    res.json({
+      success: true,
+      jobId,
+      message: "Processamento iniciado em background"
+    });
+
+  } catch (err) {
+    console.error("Erro crítico na rota /extrair-audio:", err);
+    res.status(500).json({ error: "Falha ao processar requisição" });
+  }
 });
 
-// Função separada para a lógica da ferramenta genérica
-async function extrairAudioGenerico(req, res) {
-    const files = req.files || [];
-    const allTempFiles = files.map(f => f.path);
-    try {
-        const processedFiles = [];
-        for (const file of files) {
-            const outputFilename = `${path.parse(file.filename).name}.mp3`;
-            const outputPath = path.join(processedDir, `extraido-${outputFilename}`);
-            allTempFiles.push(outputPath);
-            await runFFmpeg(`ffmpeg -i "${file.path}" -vn -q:a 0 -map a -y "${outputPath}"`);
-            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
-        }
-        sendZipResponse(res, processedFiles, allTempFiles);
-    } catch (e) {
-        safeDeleteFiles(allTempFiles);
-        res.status(500).send(e.message);
-    }
-}
-
-
-app.post('/transcrever-audio', upload.fields([
-    { name: 'audio', maxCount: 1 },
-    { name: 'googleCreds', maxCount: 1 },
-    { name: 'languageCode', maxCount: 1 }
-]), async (req, res) => {
+app.post('/transcrever-audio', upload.fields([ { name: 'audio', maxCount: 1 }, { name: 'googleCreds', maxCount: 1 }, { name: 'languageCode', maxCount: 1 } ]), async (req, res) => {
     const audioFile = req.files.audio?.[0];
     const { googleCreds, languageCode = 'pt-BR' } = req.body;
     if (!audioFile || !googleCreds) return res.status(400).send('Dados insuficientes.');
-
     const allTempFiles = [audioFile.path];
     try {
         let creds;
-        try {
-            creds = JSON.parse(googleCreds);
-        } catch (jsonError) {
-            throw new Error("As credenciais do Google Cloud não são um JSON válido.");
-        }
-        
+        try { creds = JSON.parse(googleCreds); } 
+        catch (jsonError) { throw new Error("As credenciais do Google Cloud não são um JSON válido."); }
         const tempCredsPath = path.join(uploadDir, `creds-${Date.now()}.json`);
         fs.writeFileSync(tempCredsPath, JSON.stringify(creds));
         allTempFiles.push(tempCredsPath);
-
         const speechClient = new SpeechClient({ keyFilename: tempCredsPath });
         const audioBytes = fs.readFileSync(audioFile.path).toString('base64');
-        
-        const request = {
-            audio: { content: audioBytes },
-            config: { encoding: 'WAV', sampleRateHertz: 16000, languageCode: languageCode, model: 'default' },
-        };
-
+        const request = { audio: { content: audioBytes }, config: { encoding: 'WAV', sampleRateHertz: 16000, languageCode: languageCode, model: 'default' }, };
         const [response] = await speechClient.recognize(request);
         const transcription = response.results.map(result => result.alternatives[0].transcript).join('\n');
-        
         res.json({ script: transcription || "Não foi possível transcrever o áudio." });
     } catch (e) {
         res.status(500).send(e.message);
@@ -1195,65 +818,47 @@ app.post('/transcrever-audio', upload.fields([
     }
 });
 
-// ** ROTA MODIFICADA PARA ACEITAR URL **
 app.post('/extrair-frames', upload.single('video'), async (req, res) => {
     let videoPath = null;
     let isTempFile = false;
     let allTempFiles = [];
+    if (req.file) allTempFiles.push(req.file.path);
 
     try {
         if (req.file) {
             console.log('IA Turbo: Extraindo frames do ficheiro carregado...');
             videoPath = req.file.path;
-            allTempFiles.push(videoPath);
         } else if (req.body.url) {
             const videoUrl = req.body.url;
             console.log(`IA Turbo: Extraindo frames do URL: ${videoUrl}`);
-            
-            if (!ytdl.validateURL(videoUrl)) {
-                return res.status(400).send('URL do YouTube inválido.');
-            }
-
             videoPath = path.join(uploadDir, `download_frames_${Date.now()}.mp4`);
             isTempFile = true;
             allTempFiles.push(videoPath);
-            
-            await new Promise((resolve, reject) => {
-                ytdl(videoUrl, { filter: 'audioandvideo', quality: 'highest' })
-                    .pipe(fs.createWriteStream(videoPath))
-                    .on('finish', resolve)
-                    .on('error', reject);
-            });
+            await youtubedl.exec(videoUrl, { output: videoPath, format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' });
             console.log('Download do URL para frames concluído.');
         } else {
             return res.status(400).send('Nenhum ficheiro ou URL enviado.');
         }
-        
         const uniquePrefix = `frame-${Date.now()}`;
         const outputPattern = path.join(processedDir, `${uniquePrefix}-%03d.png`);
-        
         const sceneDetectionThreshold = 0.4;
         await runFFmpeg(`ffmpeg -i "${videoPath}" -vf "select='gt(scene,${sceneDetectionThreshold})'" -vsync vfr -y "${outputPattern}"`);
-        
         let frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
         allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
-
         if (frameFiles.length === 0) {
             console.log("Nenhuma mudança de cena detectada. Extraindo frames a cada 5 segundos.");
             await runFFmpeg(`ffmpeg -i "${videoPath}" -vf fps=1/5 -y "${outputPattern}"`);
             frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
             allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
         }
-
         const base64Frames = frameFiles.map(frameFile => {
             const framePath = path.join(processedDir, frameFile);
             const bitmap = fs.readFileSync(framePath);
             return `data:image/png;base64,${Buffer.from(bitmap).toString('base64')}`;
         });
-        
         res.json({ frames: base64Frames });
-
     } catch (e) {
+        console.error(`Erro em /extrair-frames: ${e.message}`);
         res.status(500).send(e.message);
     } finally {
         safeDeleteFiles(allTempFiles);
@@ -1263,39 +868,25 @@ app.post('/extrair-frames', upload.single('video'), async (req, res) => {
 function getEffectFilter(transition, duration, dValue, width, height) {
     switch (transition) {
         case 'frei0r.filter.blackwhite': return `frei0r=filter_name=blackwhite`;
-        // ... adicione casos para todos os 100+ filtros
-        default: // Ken Burns como padrão
-            return `zoompan=z='min(zoom+0.001,1.1)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
+        default: return `zoompan=z='min(zoom+0.001,1.1)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
     }
 }
-
 
 app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, res) => {
     const narrationFile = req.file;
     const { images, script, imageDuration, videoType, blockSize, transition } = req.body;
-
-    if (!narrationFile || !images || !script) {
-        if (narrationFile) safeDeleteFiles([narrationFile.path]);
-        return res.status(400).send('Dados insuficientes para mixar o vídeo.');
-    }
-
+    if (!narrationFile || !images || !script) { if (narrationFile) safeDeleteFiles([narrationFile.path]); return res.status(400).send('Dados insuficientes para mixar o vídeo.'); }
     const imageArray = JSON.parse(images);
     const scriptLines = script.split(/\r?\n/).filter(l => l.trim() !== '');
     let allTempFiles = [narrationFile.path];
-
     try {
         const isShort = videoType === 'short';
         const videoWidth = isShort ? 1080 : 1920;
         const videoHeight = isShort ? 1920 : 1080;
-
         const blocks = [];
         const blockLen = parseInt(blockSize) || 10;
-        for (let i = 0; i < imageArray.length; i += blockLen) {
-            blocks.push(imageArray.slice(i, i + blockLen));
-        }
-
+        for (let i = 0; i < imageArray.length; i += blockLen) { blocks.push(imageArray.slice(i, i + blockLen)); }
         const blockVideoPaths = [];
-
         for (let b = 0; b < blocks.length; b++) {
             console.log(`Processando bloco ${b + 1} de ${blocks.length}...`);
             const blockImages = blocks[b];
@@ -1306,62 +897,41 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
                 allTempFiles.push(imagePath);
                 return imagePath;
             });
-
             let durationPerImage;
             const parsedImageDuration = parseFloat(imageDuration);
-            if (parsedImageDuration > 0) {
-                durationPerImage = parsedImageDuration;
-            } else {
-                const audioDuration = await getMediaDuration(narrationFile.path);
-                durationPerImage = audioDuration / imageArray.length;
-            }
-
+            if (parsedImageDuration > 0) { durationPerImage = parsedImageDuration; } 
+            else { const audioDuration = await getMediaDuration(narrationFile.path); durationPerImage = audioDuration / imageArray.length; }
             const fileListPath = path.join(uploadDir, `list-block${b}-${Date.now()}.txt`);
             let fileContent = "";
             imagePaths.forEach((p, i) => {
                 const safePath = p.replace(/'/g, "'\\''");
-                if (i < imagePaths.length - 1) {
-                    fileContent += `file '${safePath}'\nduration ${durationPerImage}\n`;
-                } else {
-                    fileContent += `file '${safePath}'\n`;
-                }
+                if (i < imagePaths.length - 1) { fileContent += `file '${safePath}'\nduration ${durationPerImage}\n`; } 
+                else { fileContent += `file '${safePath}'\n`; }
             });
             fs.writeFileSync(fileListPath, fileContent);
             allTempFiles.push(fileListPath);
-
             const silentVideoPath = path.join(processedDir, `silent-block${b}-${Date.now()}.mp4`);
             allTempFiles.push(silentVideoPath);
             const fps = 25;
             const dValue = Math.max(1, Math.round(durationPerImage * fps));
-            
             const effectFilter = getEffectFilter(transition, durationPerImage, dValue, videoWidth, videoHeight);
-
-            await runFFmpeg(
-                `ffmpeg -f concat -safe 0 -i "${fileListPath}" ` +
-                `-vf "scale=${videoWidth}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${videoWidth}:${videoHeight}:-1:-1,${effectFilter},format=yuv420p" ` +
-                `-c:v libx264 -r ${fps} -y "${silentVideoPath}"`
-            );
-
+            await runFFmpeg( `ffmpeg -f concat -safe 0 -i "${fileListPath}" ` + `-vf "scale=${videoWidth}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${videoWidth}:${videoHeight}:-1:-1,${effectFilter},format=yuv420p" ` + `-c:v libx264 -r ${fps} -y "${silentVideoPath}"` );
             blockVideoPaths.push(silentVideoPath);
         }
-
         console.log("Concatenando blocos de vídeo...");
         const finalListPath = path.join(uploadDir, `list-final-${Date.now()}.txt`);
         const fileContentFinal = blockVideoPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
         fs.writeFileSync(finalListPath, fileContentFinal);
         allTempFiles.push(finalListPath);
-
         const finalSilentPath = path.join(processedDir, `silent-final-${Date.now()}.mp4`);
         allTempFiles.push(finalSilentPath);
         await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${finalListPath}" -c copy -y "${finalSilentPath}"`);
-
         console.log("Gerando legendas SRT...");
         let srtContent = "";
         let currentTime = 0.0;
         const audioDuration = await getMediaDuration(narrationFile.path);
         const totalWords = scriptLines.reduce((acc, l) => acc + l.split(/\s+/).length, 0);
         const perWordDuration = totalWords > 0 ? audioDuration / totalWords : 0;
-
         function formatTime(seconds) {
             const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
             const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
@@ -1369,7 +939,6 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
             const ms = Math.floor((seconds % 1) * 1000).toString().padStart(3, '0');
             return `${h}:${m}:${s},${ms}`;
         }
-
         scriptLines.forEach((line, index) => {
             const wordsCount = line.split(/\s+/).length;
             const duration = perWordDuration * wordsCount;
@@ -1378,94 +947,25 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
             srtContent += `${index + 1}\n${start} --> ${end}\n${line}\n\n`;
             currentTime += duration;
         });
-
         const srtPath = path.join(uploadDir, `subtitles-${Date.now()}.srt`);
         fs.writeFileSync(srtPath, srtContent);
         allTempFiles.push(srtPath);
-
         console.log("Mixando áudio e legendas...");
         const outputPath = path.join(processedDir, `video-final-turbo-adv-${Date.now()}.mp4`);
         allTempFiles.push(outputPath);
-
-        await runFFmpeg(
-            `ffmpeg -i "${finalSilentPath}" -i "${narrationFile.path}" ` +
-            `-vf "subtitles='${srtPath.replace(/\\/g, '/')}'" ` +
-            `-c:v libx264 -c:a aac -shortest -y "${outputPath}"`
-        );
-
+        await runFFmpeg( `ffmpeg -i "${finalSilentPath}" -i "${narrationFile.path}" ` + `-vf "subtitles='${srtPath.replace(/\\/g, '/')}'" ` + `-c:v libx264 -c:a aac -shortest -y "${outputPath}"` );
         res.sendFile(outputPath, (err) => {
             if (err) console.error('Erro ao enviar vídeo final:', err);
             safeDeleteFiles(allTempFiles);
         });
-
     } catch (e) {
         safeDeleteFiles(allTempFiles);
         res.status(500).send(e.message);
     }
-    });
-
-    
-// Rota para extrair áudio do YouTube
-app.post("/extrair-audio", async (req, res) => {
-  try {
-    console.log("Recebido body:", req.body);
-
-    // Validação básica do body
-    if (!req.body) {
-      return res.status(400).json({ error: "Body vazio" });
-    }
-
-    const { url } = req.body;
-
-    if (!url || typeof url !== "string") {
-      return res.status(400).json({ error: "URL não fornecida ou inválida" });
-    }
-
-    const jobId = Date.now();
-
-    // Processamento em background
-    setImmediate(async () => {
-      try {
-        console.log(`IA Turbo: Iniciando processamento do job ${jobId} para URL: ${url}`);
-
-        const info = await youtubedl(url, {
-          extractAudio: true,        // Extrai apenas áudio
-          audioFormat: "mp3",        // Formato de saída
-          dumpSingleJson: true,      // Retorna informações do vídeo
-          addHeader: [
-            "referer:youtube.com",
-            "user-agent:googlebot"
-          ]
-        });
-
-        console.log(`Job ${jobId} finalizado com sucesso:`, info.title);
-
-        // Aqui você poderia:
-        // - salvar o arquivo de áudio em storage
-        // - atualizar o status do job em um banco de dados
-      } catch (err) {
-        console.error(`Erro no job ${jobId}:`, err);
-      }
-    });
-
-    // Responde imediatamente ao cliente
-    res.json({
-      success: true,
-      jobId,
-      message: "Processamento iniciado em background"
-    });
-
-  } catch (err) {
-    console.error("Erro crítico na rota /extrair-audio:", err);
-    res.status(500).json({ error: "Falha ao processar requisição" });
-  }
 });
+
 
 // 6. Iniciar Servidor
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
-
-
-
-
