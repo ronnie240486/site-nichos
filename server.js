@@ -9,7 +9,6 @@ const archiver = require('archiver');
 const { SpeechClient } = require('@google-cloud/speech');
 const fetch = require('node-fetch');
 const FormData = require('form-data');
-// CORREÇÃO: Removemos o ytdl-core e usamos apenas o youtube-dl-exec
 const youtubedl = require("youtube-dl-exec"); 
 
 // 2. Configuração Inicial
@@ -130,7 +129,6 @@ app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
 
 // --- ROTAS DE FERRAMENTAS GERAIS ---
-// (Todas as rotas de ferramentas gerais como /cortar-video, /unir-videos, etc. permanecem inalteradas)
 app.post('/cortar-video', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
     if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
@@ -461,7 +459,6 @@ app.post('/separar-faixas', upload.array('videos'), async (req, res) => {
     if (files.length === 0) { return res.status(400).send('Nenhum ficheiro de áudio enviado.'); }
     const allTempFiles = files.map(f => f.path);
     try {
-        const processedFiles = [];
         for (const file of files) { console.log(`Processando separação de faixas para: ${file.filename}`); }
         console.log("Faixas separadas com sucesso (simulação).");
         safeDeleteFiles(allTempFiles);
@@ -772,9 +769,6 @@ app.post("/extrair-audio", async (req, res) => {
 
         console.log(`Job ${jobId} finalizado com sucesso:`, info.title);
 
-        // Aqui você poderia:
-        // - salvar o arquivo de áudio em storage
-        // - atualizar o status do job em um banco de dados
       } catch (err) {
         console.error(`Erro no job ${jobId}:`, err);
       }
@@ -807,7 +801,16 @@ app.post('/transcrever-audio', upload.fields([ { name: 'audio', maxCount: 1 }, {
         allTempFiles.push(tempCredsPath);
         const speechClient = new SpeechClient({ keyFilename: tempCredsPath });
         const audioBytes = fs.readFileSync(audioFile.path).toString('base64');
-        const request = { audio: { content: audioBytes }, config: { encoding: 'WAV', sampleRateHertz: 16000, languageCode: languageCode, model: 'default' }, };
+        const request = { 
+            audio: { content: audioBytes }, 
+            config: { 
+                // CORREÇÃO: Usar LINEAR16 em vez de WAV para a codificação
+                encoding: 'LINEAR16', 
+                sampleRateHertz: 16000, 
+                languageCode: languageCode, 
+                model: 'default' 
+            }, 
+        };
         const [response] = await speechClient.recognize(request);
         const transcription = response.results.map(result => result.alternatives[0].transcript).join('\n');
         res.json({ script: transcription || "Não foi possível transcrever o áudio." });
@@ -969,3 +972,4 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
