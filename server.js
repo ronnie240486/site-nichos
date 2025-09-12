@@ -1045,6 +1045,32 @@ app.post("/download", async (req, res) => {
   }
 });
 
+// Rota para obter informações do vídeo
+app.post("/video-info", async (req, res) => {
+  try {
+    const { url } = req.body;
+    console.log("Processando URL:", url);
+
+    // Obter informações do vídeo
+    const info = await youtubedl(url, {
+      dumpSingleJson: true,
+      noWarnings: true,
+      preferFreeFormats: true,
+      addHeader: ["referer:youtube.com", "user-agent:googlebot"]
+    });
+
+    res.json({
+      title: info.title,
+      duration: info.duration,
+      uploader: info.uploader,
+      formats: info.formats
+    });
+  } catch (err) {
+    console.error("Erro ao processar vídeo:", err);
+    res.status(500).json({ error: "Falha ao processar o vídeo" });
+  }
+});
+
 
 // --- ROTAS DO IA TURBO ---
 
@@ -1384,5 +1410,6 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
