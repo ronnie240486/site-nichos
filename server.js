@@ -1406,7 +1406,15 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 
     
 app.post("/extrair-audio", (req, res) => {
+  console.log("Recebido body:", req.body);
+
   const { url } = req.body;
+
+  if (!url || typeof url !== "string") {
+    console.error("URL ausente ou inválida");
+    return res.status(400).json({ error: "URL não fornecida ou inválida" });
+  }
+
   const jobId = Date.now();
 
   // Executa em background para não travar a requisição HTTP
@@ -1422,7 +1430,7 @@ app.post("/extrair-audio", (req, res) => {
         ]
       });
 
-      console.log(`Job ${jobId} finalizado`, info.title);
+      console.log(`Job ${jobId} finalizado:`, info.title);
 
       // Aqui você poderia:
       // - salvar o arquivo de áudio em storage
@@ -1446,5 +1454,6 @@ app.post("/extrair-audio", (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
