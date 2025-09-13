@@ -1003,96 +1003,259 @@ app.post("/video-info", async (req, res) => {
 });
 
 // --- ROTAS DO IA TURBO ---
-app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, res) => {
-    const narrationFile = req.file;
-    const { images, script, imageDuration, videoType, blockSize, transition } = req.body;
-    if (!narrationFile || !images || !script) { if (narrationFile) safeDeleteFiles([narrationFile.path]); return res.status(400).send('Dados insuficientes para mixar o vídeo.'); }
-    const imageArray = JSON.parse(images);
-    const scriptLines = script.split(/\r?\n/).filter(l => l.trim() !== '');
-    let allTempFiles = [narrationFile.path];
+app.post('/extrair-audio', upload.single('video'), async (req, res) => {
+    let videoPath = null;
+    let allTempFiles = [];
+    if (req.file) allTempFiles.push(req.file.path);
+
     try {
-        const isShort = videoType === 'short';
-        const videoWidth = isShort ? 1080 : 1920;
-        const videoHeight = isShort ? 1920 : 1080;
-        const blocks = [];
-        const blockLen = parseInt(blockSize) || 10;
-        for (let i = 0; i < imageArray.length; i += blockLen) { blocks.push(imageArray.slice(i, i + blockLen)); }
-        const blockVideoPaths = [];
-        for (let b = 0; b < blocks.length; b++) {
-            console.log(`Processando bloco ${b + 1} de ${blocks.length}...`);
-            const blockImages = blocks[b];
-            const imagePaths = blockImages.map((dataUrl, i) => {
-                const base64Data = dataUrl.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
-                const imagePath = path.join(uploadDir, `block${b}-${Date.now()}-${i}.png`);
-                fs.writeFileSync(imagePath, base64Data, 'base64');
-                allTempFiles.push(imagePath);
-                return imagePath;
-            });
-            let durationPerImage;
-            const parsedImageDuration = parseFloat(imageDuration);
-            if (parsedImageDuration > 0) { durationPerImage = parsedImageDuration; } 
-            else { const audioDuration = await getMediaDuration(narrationFile.path); durationPerImage = audioDuration / imageArray.length; }
-            const fileListPath = path.join(uploadDir, `list-block${b}-${Date.now()}.txt`);
-            let fileContent = "";
-            imagePaths.forEach((p, i) => {
-                const safePath = p.replace(/'/g, "'\\''");
-                if (i < imagePaths.length - 1) { fileContent += `file '${safePath}'\nduration ${durationPerImage}\n`; } 
-                else { fileContent += `file '${safePath}'\n`; }
-            });
-            fs.writeFileSync(fileListPath, fileContent);
-            allTempFiles.push(fileListPath);
-            const silentVideoPath = path.join(processedDir, `silent-block${b}-${Date.now()}.mp4`);
-            allTempFiles.push(silentVideoPath);
-            const fps = 25;
-            const dValue = Math.max(1, Math.round(durationPerImage * fps));
-            const effectFilter = getEffectFilter(transition, durationPerImage, dValue, videoWidth, videoHeight);
-            await runFFmpeg( `ffmpeg -f concat -safe 0 -i "${fileListPath}" ` + `-vf "scale=${videoWidth}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${videoWidth}:${videoHeight}:-1:-1,${effectFilter},format=yuv420p" ` + `-c:v libx264 -r ${fps} -y "${silentVideoPath}"` );
-            blockVideoPaths.push(silentVideoPath);
+        if (req.file) {
+            videoPath = req.file.path;
+        } else if (req.body.url) {
+            const videoUrl = req.body.url;
+            videoPath = path.join(uploadDir, `download_audio_${Date.now()}.mp4`);
+            allTempFiles.push(videoPath);
+            await youtubedl.exec(videoUrl, { output: videoPath, format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' });
+        } else {
+            return res.status(400).send('Nenhum ficheiro ou URL enviado.');
         }
-        console.log("Concatenando blocos de vídeo...");
-        const finalListPath = path.join(uploadDir, `list-final-${Date.now()}.txt`);
-        const fileContentFinal = blockVideoPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
-        fs.writeFileSync(finalListPath, fileContentFinal);
-        allTempFiles.push(finalListPath);
-        const finalSilentPath = path.join(processedDir, `silent-final-${Date.now()}.mp4`);
-        allTempFiles.push(finalSilentPath);
-        await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${finalListPath}" -c copy -y "${finalSilentPath}"`);
-        console.log("Gerando legendas SRT...");
-        let srtContent = "";
-        let currentTime = 0.0;
-        const audioDuration = await getMediaDuration(narrationFile.path);
-        const totalWords = scriptLines.reduce((acc, l) => acc + l.split(/\s+/).length, 0);
-        const perWordDuration = totalWords > 0 ? audioDuration / totalWords : 0;
-        function formatTime(seconds) {
-            const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
-            const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
-            const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-            const ms = Math.floor((seconds % 1) * 1000).toString().padStart(3, '0');
-            return `${h}:${m}:${s},${ms}`;
-        }
-        scriptLines.forEach((line, index) => {
-            const wordsCount = line.split(/\s+/).length;
-            const duration = perWordDuration * wordsCount;
-            const start = formatTime(currentTime);
-            const end = formatTime(currentTime + duration);
-            srtContent += `${index + 1}\n${start} --> ${end}\n${line}\n\n`;
-            currentTime += duration;
-        });
-        const srtPath = path.join(uploadDir, `subtitles-${Date.now()}.srt`);
-        fs.writeFileSync(srtPath, srtContent);
-        allTempFiles.push(srtPath);
-        console.log("Mixando áudio e legendas...");
-        const outputPath = path.join(processedDir, `video-final-turbo-adv-${Date.now()}.mp4`);
+
+        const outputPath = path.join(processedDir, `audio-ext-${Date.now()}.wav`);
         allTempFiles.push(outputPath);
-        await runFFmpeg( `ffmpeg -i "${finalSilentPath}" -i "${narrationFile.path}" ` + `-vf "subtitles='${srtPath.replace(/\\/g, '/')}'" ` + `-c:v libx264 -c:a aac -shortest -y "${outputPath}"` );
+        await runFFmpeg(`ffmpeg -i "${videoPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y "${outputPath}"`);
+        
         res.sendFile(outputPath, (err) => {
-            if (err) console.error('Erro ao enviar vídeo final:', err);
+            if (err) console.error('Erro ao enviar áudio:', err);
             safeDeleteFiles(allTempFiles);
         });
     } catch (e) {
+        console.error(`Erro em /extrair-audio: ${e.message}`);
         safeDeleteFiles(allTempFiles);
         res.status(500).send(e.message);
     }
+});
+
+app.post('/transcrever-audio', upload.fields([ { name: 'audio', maxCount: 1 }, { name: 'googleCreds', maxCount: 1 }, { name: 'languageCode', maxCount: 1 } ]), async (req, res) => {
+    const audioFile = req.files.audio?.[0];
+    const { googleCreds, languageCode = 'pt-BR' } = req.body;
+    if (!audioFile || !googleCreds) return res.status(400).send('Dados insuficientes.');
+    const allTempFiles = [audioFile.path];
+    try {
+        let creds;
+        try { creds = JSON.parse(googleCreds); } 
+        catch (jsonError) { throw new Error("As credenciais do Google Cloud não são um JSON válido."); }
+        
+        const tempCredsPath = path.join(uploadDir, `creds-${Date.now()}.json`);
+        fs.writeFileSync(tempCredsPath, JSON.stringify(creds));
+        allTempFiles.push(tempCredsPath);
+
+        const speechClient = new SpeechClient({ keyFilename: tempCredsPath });
+        const audioBytes = fs.readFileSync(audioFile.path).toString('base64');
+        const request = { 
+            audio: { content: audioBytes }, 
+            config: { 
+                encoding: 'LINEAR16', 
+                sampleRateHertz: 16000, 
+                languageCode: languageCode, 
+                model: 'default' 
+            }, 
+        };
+        const [response] = await speechClient.recognize(request);
+        const transcription = response.results.map(result => result.alternatives[0].transcript).join('\n');
+        res.json({ script: transcription || "Não foi possível transcrever o áudio." });
+    } catch (e) {
+        res.status(500).send(e.message);
+    } finally {
+        safeDeleteFiles(allTempFiles);
+    }
+});
+
+app.post('/extrair-frames', upload.single('video'), (req, res) => {
+    const jobId = `job_${Date.now()}`;
+    jobs[jobId] = { status: 'pending' };
+
+    res.json({ success: true, jobId: jobId });
+
+    setImmediate(async () => {
+        let videoPath = null;
+        let allTempFiles = [];
+        if (req.file) allTempFiles.push(req.file.path);
+
+        try {
+            jobs[jobId].status = 'processing';
+
+            if (req.file) {
+                videoPath = req.file.path;
+            } else if (req.body.url) {
+                const videoUrl = req.body.url;
+                videoPath = path.join(uploadDir, `download_frames_${Date.now()}.mp4`);
+                allTempFiles.push(videoPath);
+                await youtubedl.exec(videoUrl, { output: videoPath, format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' });
+            } else {
+                throw new Error('Nenhum ficheiro ou URL enviado.');
+            }
+
+            const uniquePrefix = `frame-${jobId}`;
+            const outputPattern = path.join(processedDir, `${uniquePrefix}-%03d.png`);
+            
+            const sceneDetectionThreshold = 0.4;
+            await runFFmpeg(`ffmpeg -i "${videoPath}" -vf "select='gt(scene,${sceneDetectionThreshold})'" -vsync vfr -y "${outputPattern}"`);
+            
+            let frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
+            allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
+
+            if (frameFiles.length === 0) {
+                 await runFFmpeg(`ffmpeg -i "${videoPath}" -vf fps=1/5 -y "${outputPattern}"`);
+                 frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
+                 allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
+            }
+
+            const base64Frames = frameFiles.map(frameFile => {
+                const framePath = path.join(processedDir, frameFile);
+                const bitmap = fs.readFileSync(framePath);
+                return `data:image/png;base64,${Buffer.from(bitmap).toString('base64')}`;
+            });
+            
+            jobs[jobId] = { status: 'completed', result: { isFilePath: false, data: { frames: base64Frames } } };
+
+        } catch (e) {
+            jobs[jobId] = { status: 'failed', error: e.message };
+        } finally {
+            safeDeleteFiles(allTempFiles);
+        }
+    });
+});
+
+app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) => {
+    const jobId = `mix_job_${Date.now()}`;
+    jobs[jobId] = { status: 'pending', progress: '0%' };
+
+    res.json({ success: true, jobId: jobId });
+
+    setImmediate(async () => {
+        const narrationFile = req.file;
+        const { images, script, imageDuration, videoType, blockSize, transition } = req.body;
+        let allTempFiles = [];
+        if (narrationFile) allTempFiles.push(narrationFile.path);
+
+        try {
+            if (!narrationFile || !images || !script) {
+                throw new Error('Dados insuficientes para mixar o vídeo.');
+            }
+            
+            jobs[jobId].status = 'processing';
+            jobs[jobId].progress = '10%';
+
+            const imageArray = JSON.parse(images);
+            const scriptLines = script.split(/\r?\n/).filter(l => l.trim() !== '');
+            
+            const isShort = videoType === 'short';
+            const videoWidth = isShort ? 1080 : 1920;
+            const videoHeight = isShort ? 1920 : 1080;
+            const blocks = [];
+            const blockLen = parseInt(blockSize) || 10;
+            for (let i = 0; i < imageArray.length; i += blockLen) {
+                blocks.push(imageArray.slice(i, i + blockLen));
+            }
+            
+            const blockVideoPaths = [];
+            for (let b = 0; b < blocks.length; b++) {
+                jobs[jobId].progress = `${10 + Math.round(40 * (b / blocks.length))}%`;
+
+                const blockImages = blocks[b];
+                const imagePaths = blockImages.map((dataUrl, i) => {
+                    const base64Data = dataUrl.replace(/^data:image\/(png|jpeg|webp);base64,/, "");
+                    const imagePath = path.join(uploadDir, `block${b}-${jobId}-${i}.png`);
+                    fs.writeFileSync(imagePath, base64Data, 'base64');
+                    allTempFiles.push(imagePath);
+                    return imagePath;
+                });
+                
+                let durationPerImage;
+                const parsedImageDuration = parseFloat(imageDuration);
+                if (parsedImageDuration > 0) {
+                    durationPerImage = parsedImageDuration;
+                } else {
+                    const audioDuration = await getMediaDuration(narrationFile.path);
+                    durationPerImage = audioDuration / imageArray.length;
+                }
+                
+                const fileListPath = path.join(uploadDir, `list-block${b}-${jobId}.txt`);
+                let fileContent = imagePaths.map(p => `file '${p.replace(/'/g, "'\\''")}'\nduration ${durationPerImage}`).join('\n');
+                fs.writeFileSync(fileListPath, fileContent);
+                allTempFiles.push(fileListPath);
+
+                const silentVideoPath = path.join(processedDir, `silent-block${b}-${jobId}.mp4`);
+                allTempFiles.push(silentVideoPath);
+                const fps = 25;
+                const dValue = Math.max(1, Math.round(durationPerImage * fps));
+                const effectFilter = getEffectFilter(transition, durationPerImage, dValue, videoWidth, videoHeight);
+
+                await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${fileListPath}" -vf "scale=${videoWidth}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${videoWidth}:${videoHeight}:-1:-1,${effectFilter},format=yuv420p" -c:v libx264 -r ${fps} -y "${silentVideoPath}"`);
+                blockVideoPaths.push(silentVideoPath);
+            }
+            
+            jobs[jobId].progress = '50%';
+
+            const finalListPath = path.join(uploadDir, `list-final-${jobId}.txt`);
+            const fileContentFinal = blockVideoPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
+            fs.writeFileSync(finalListPath, fileContentFinal);
+            allTempFiles.push(finalListPath);
+
+            const finalSilentPath = path.join(processedDir, `silent-final-${jobId}.mp4`);
+            allTempFiles.push(finalSilentPath);
+            await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${finalListPath}" -c copy -y "${finalSilentPath}"`);
+
+            jobs[jobId].progress = '70%';
+
+            let srtContent = "";
+            let currentTime = 0.0;
+            const audioDuration = await getMediaDuration(narrationFile.path);
+            const totalWords = scriptLines.reduce((acc, l) => acc + l.split(/\s+/).length, 0);
+            const perWordDuration = totalWords > 0 ? audioDuration / totalWords : 0;
+
+            function formatTime(seconds) {
+                const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+                const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+                const s = Math.floor(seconds % 60).toString().padStart(2, '0');
+                const ms = Math.floor((seconds % 1) * 1000).toString().padStart(3, '0');
+                return `${h}:${m}:${s},${ms}`;
+            }
+
+            scriptLines.forEach((line, index) => {
+                const wordsCount = line.split(/\s+/).length;
+                const duration = perWordDuration * wordsCount;
+                const start = formatTime(currentTime);
+                const end = formatTime(currentTime + duration);
+                srtContent += `${index + 1}\n${start} --> ${end}\n${line}\n\n`;
+                currentTime += duration;
+            });
+
+            const srtPath = path.join(uploadDir, `subtitles-${jobId}.srt`);
+            fs.writeFileSync(srtPath, srtContent);
+            allTempFiles.push(srtPath);
+            
+            jobs[jobId].progress = '85%';
+
+            const outputPath = path.join(processedDir, `video-final-${jobId}.mp4`);
+            
+            await runFFmpeg(`ffmpeg -i "${finalSilentPath}" -i "${narrationFile.path}" -vf "subtitles='${srtPath.replace(/\\/g, '/')}'" -c:v libx264 -c:a aac -shortest -y "${outputPath}"`);
+
+            jobs[jobId] = { 
+                status: 'completed', 
+                progress: '100%',
+                result: { 
+                    isFilePath: true,
+                    data: outputPath 
+                }
+            };
+            
+        } catch (e) {
+            jobs[jobId] = { status: 'failed', error: e.message };
+        } finally {
+            safeDeleteFiles(allTempFiles);
+        }
+    });
 });
 
 
@@ -1100,3 +1263,4 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), async (req, 
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
