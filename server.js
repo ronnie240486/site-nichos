@@ -1020,39 +1020,60 @@ app.post('/extrair-audio', upload.single('video'), (req, res) => {
 });
 
 
-app.post('/transcrever-audio', upload.fields([ { name: 'audio', maxCount: 1 }, { name: 'googleCreds', maxCount: 1 }, { name: 'languageCode', maxCount: 1 } ]), async (req, res) => {
-    const audioFile = req.files.audio?.[0];
-    const { googleCreds, languageCode = 'pt-BR' } = req.body;
-    if (!audioFile || !googleCreds) return res.status(400).send('Dados insuficientes.');
-    const allTempFiles = [audioFile.path];
-    try {
-        let creds;
-        try { creds = JSON.parse(googleCreds); } 
-        catch (jsonError) { throw new Error("As credenciais do Google Cloud não são um JSON válido."); }
-        
-        const tempCredsPath = path.join(uploadDir, `creds-${Date.now()}.json`);
-        fs.writeFileSync(tempCredsPath, JSON.stringify(creds));
-        allTempFiles.push(tempCredsPath);
+app.post('/transcrever-audio', upload.fields([ { name: 'audio', maxCount: 1 }, { name: 'googleCreds', maxCount: 1 }, { name: 'languageCode', maxCount: 1 } ]), (req, res) => {
+    const jobId = `transcribe_job_${Date.now()}`;
+    jobs[jobId] = { status: 'pending' };
 
-        const speechClient = new SpeechClient({ keyFilename: tempCredsPath });
-        const audioBytes = fs.readFileSync(audioFile.path).toString('base64');
-        const request = { 
-            audio: { content: audioBytes }, 
-            config: { 
-                encoding: 'LINEAR16', 
-                sampleRateHertz: 16000, 
-                languageCode: languageCode, 
-                model: 'default' 
-            }, 
-        };
-        const [response] = await speechClient.recognize(request);
-        const transcription = response.results.map(result => result.alternatives[0].transcript).join('\n');
-        res.json({ script: transcription || "Não foi possível transcrever o áudio." });
-    } catch (e) {
-        res.status(500).send(e.message);
-    } finally {
-        safeDeleteFiles(allTempFiles);
-    }
+    res.json({ success: true, jobId: jobId });
+
+    setImmediate(async () => {
+        const audioFile = req.files.audio?.[0];
+        const { googleCreds, languageCode = 'pt-BR' } = req.body;
+        const allTempFiles = [];
+        if (audioFile) allTempFiles.push(audioFile.path);
+
+        try {
+            if (!audioFile || !googleCreds) {
+                throw new Error('Dados insuficientes para a transcrição.');
+            }
+            jobs[jobId].status = 'processing';
+            
+            let creds;
+            try { creds = JSON.parse(googleCreds); } 
+            catch (jsonError) { throw new Error("As credenciais do Google Cloud não são um JSON válido."); }
+            
+            const tempCredsPath = path.join(uploadDir, `creds-${jobId}.json`);
+            fs.writeFileSync(tempCredsPath, JSON.stringify(creds));
+            allTempFiles.push(tempCredsPath);
+
+            const speechClient = new SpeechClient({ keyFilename: tempCredsPath });
+            const audioBytes = fs.readFileSync(audioFile.path).toString('base64');
+            const request = { 
+                audio: { content: audioBytes }, 
+                config: { 
+                    encoding: 'LINEAR16', 
+                    sampleRateHertz: 16000, 
+                    languageCode: languageCode, 
+                    model: 'default' 
+                }, 
+            };
+            const [response] = await speechClient.recognize(request);
+            const transcription = response.results.map(result => result.alternatives[0].transcript).join('\n');
+            
+            jobs[jobId] = { 
+                status: 'completed', 
+                result: { 
+                    isFilePath: false, 
+                    data: { script: transcription || "Não foi possível transcrever o áudio." } 
+                } 
+            };
+
+        } catch (e) {
+            jobs[jobId] = { status: 'failed', error: e.message };
+        } finally {
+            safeDeleteFiles(allTempFiles);
+        }
+    });
 });
 
 app.post('/extrair-frames', upload.single('video'), (req, res) => {
@@ -1249,6 +1270,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
