@@ -15,6 +15,10 @@ const youtubedl = require("youtube-dl-exec");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// ** CORREÇÃO ADICIONADA AQUI **
+// Objeto para guardar o estado dos trabalhos em background
+const jobs = {};
+
 const uploadDir = path.join(__dirname, 'uploads');
 const processedDir = path.join(__dirname, 'processed');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
@@ -39,7 +43,7 @@ const upload = multer({ storage: storage });
 function runFFmpeg(command) {
     return new Promise((resolve, reject) => {
         console.log(`Executando FFmpeg: ${command}`);
-        exec(command, (error, stdout, stderr) => {
+        exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => { // Aumenta o buffer
             if (error) {
                 console.error(`FFmpeg Stderr: ${stderr}`);
                 return reject(new Error(`Erro no FFmpeg: ${stderr || 'Erro desconhecido'}`));
@@ -75,78 +79,47 @@ function safeDeleteFiles(files) {
     });
 }
 
-function sendZipResponse(res, filesToZip, allTempFiles) {
-    if (filesToZip.length === 1) {
-        res.sendFile(filesToZip[0].path, (err) => {
-            if (err) console.error('Erro ao enviar ficheiro:', err);
-            safeDeleteFiles(allTempFiles);
-        });
-    } else {
-        const zipPath = path.join(processedDir, `resultado-${Date.now()}.zip`);
-        const output = fs.createWriteStream(zipPath);
-        const archive = archiver('zip', { zlib: { level: 9 } });
-
-        output.on('close', () => {
-            res.sendFile(zipPath, (err) => {
-                if (err) console.error('Erro ao enviar zip:', err);
-                safeDeleteFiles([...allTempFiles, zipPath]);
-            });
-        });
-        archive.on('error', (err) => { throw err; });
-        archive.pipe(output);
-        filesToZip.forEach(f => archive.file(f.path, { name: f.name }));
-        archive.finalize();
+function getEffectFilter(transition, duration, dValue, width, height) {
+    switch (transition) {
+        case 'frei0r.filter.blackwhite': return `frei0r=filter_name=blackwhite`;
+        // Adicione outros casos de filtro aqui se necessário
+        default: // Efeito Ken Burns como padrão para imagens
+            return `zoompan=z='min(zoom+0.001,1.1)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
     }
-}
-
-
-function pcmToWavBuffer(pcmData, sampleRate) {
-    const numChannels = 1;
-    const bitsPerSample = 16;
-    const blockAlign = (numChannels * bitsPerSample) / 8;
-    const byteRate = sampleRate * blockAlign;
-    const dataSize = pcmData.length;
-    const buffer = Buffer.alloc(44 + dataSize);
-    buffer.write('RIFF', 0);
-    buffer.writeUInt32LE(36 + dataSize, 4);
-    buffer.write('WAVE', 8);
-    buffer.write('fmt ', 12);
-    buffer.writeUInt32LE(16, 16);
-    buffer.writeUInt16LE(1, 20);
-    buffer.writeUInt16LE(numChannels, 22);
-    buffer.writeUInt32LE(sampleRate, 24);
-    buffer.writeUInt32LE(byteRate, 28);
-    buffer.writeUInt16LE(blockAlign, 32);
-    buffer.writeUInt16LE(bitsPerSample, 34);
-    buffer.write('data', 36);
-    buffer.writeUInt32LE(dataSize, 40);
-    pcmData.copy(buffer, 44);
-    return buffer;
 }
 
 // 5. Rotas
 app.get('/', (req, res) => res.send('Backend DarkMaker está a funcionar!'));
 app.get('/status', (req, res) => res.status(200).send('Servidor pronto.'));
 
-// --- ROTAS DE FERRAMENTAS GERAIS ---
-app.post('/cortar-video', upload.array('videos'), async (req, res) => {
-    const files = req.files || [];
-    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
-    
-    const allTempFiles = files.map(f => f.path);
-    try {
-        const { startTime, endTime } = req.body;
-        const processedFiles = [];
-        for (const file of files) {
-            const outputPath = path.join(processedDir, `cortado-${file.filename}`);
-            allTempFiles.push(outputPath);
-            await runFFmpeg(`ffmpeg -i "${file.path}" -ss ${startTime} -to ${endTime} -c copy -y "${outputPath}"`);
-            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+// --- ROTAS PARA TRABALHOS ASSÍNCRONOS ---
+app.get('/job-status/:jobId', (req, res) => {
+    const { jobId } = req.params;
+    const job = jobs[jobId];
+    if (job) {
+        res.json({ status: job.status, error: job.error, progress: job.progress });
+    } else {
+        res.status(404).json({ status: 'not_found' });
+    }
+});
+
+app.get('/job-result/:jobId', (req, res) => {
+    const { jobId } = req.params;
+    const job = jobs[jobId];
+    if (job && job.status === 'completed') {
+        if (job.result.isFilePath) {
+            res.sendFile(job.result.data, (err) => {
+                if (err) console.error(`Erro ao enviar ficheiro do job ${jobId}:`, err);
+                // Limpa o ficheiro de áudio/vídeo após ser descarregado
+                safeDeleteFiles([job.result.data]); 
+                delete jobs[jobId]; 
+            });
+        } else {
+            res.json(job.result.data);
+            delete jobs[jobId];
         }
-        sendZipResponse(res, processedFiles, allTempFiles);
-    } catch (e) {
-        safeDeleteFiles(allTempFiles);
-        res.status(500).send(e.message);
+    } else {
+        res.status(404).json({ error: 'Resultado não encontrado ou ainda não está pronto.' });
     }
 });
 
@@ -1272,10 +1245,10 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
     });
 });
 
-
 // 6. Iniciar Servidor
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
