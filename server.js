@@ -1003,37 +1003,49 @@ app.post("/video-info", async (req, res) => {
 });
 
 // --- ROTAS DO IA TURBO ---
-app.post('/extrair-audio', upload.single('video'), async (req, res) => {
-    let videoPath = null;
-    let allTempFiles = [];
-    if (req.file) allTempFiles.push(req.file.path);
 
-    try {
-        if (req.file) {
-            videoPath = req.file.path;
-        } else if (req.body.url) {
-            const videoUrl = req.body.url;
-            videoPath = path.join(uploadDir, `download_audio_${Date.now()}.mp4`);
-            allTempFiles.push(videoPath);
-            await youtubedl.exec(videoUrl, { output: videoPath, format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' });
-        } else {
-            return res.status(400).send('Nenhum ficheiro ou URL enviado.');
+// ** ROTA DE EXTRAÇÃO DE ÁUDIO ATUALIZADA PARA SER ASSÍNCRONA **
+app.post('/extrair-audio', upload.single('video'), (req, res) => {
+    const jobId = `audio_job_${Date.now()}`;
+    jobs[jobId] = { status: 'pending' };
+
+    res.json({ success: true, jobId: jobId });
+
+    setImmediate(async () => {
+        let videoPath = null;
+        let allTempFiles = [];
+        if (req.file) allTempFiles.push(req.file.path);
+
+        try {
+            jobs[jobId].status = 'processing';
+            if (req.file) {
+                videoPath = req.file.path;
+            } else if (req.body.url) {
+                const videoUrl = req.body.url;
+                videoPath = path.join(uploadDir, `download_audio_${jobId}.mp4`);
+                allTempFiles.push(videoPath);
+                await youtubedl.exec(videoUrl, { output: videoPath, format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' });
+            } else {
+                throw new Error('Nenhum ficheiro ou URL enviado.');
+            }
+
+            const outputPath = path.join(processedDir, `audio-ext-${jobId}.wav`);
+            allTempFiles.push(outputPath);
+            await runFFmpeg(`ffmpeg -i "${videoPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y "${outputPath}"`);
+            
+            jobs[jobId] = { status: 'completed', result: { isFilePath: true, data: outputPath } };
+            
+            // Limpa apenas o vídeo de input; o ficheiro de áudio será limpo após o download
+            safeDeleteFiles(allTempFiles.filter(f => f !== outputPath));
+
+        } catch (e) {
+            console.error(`[Job ${jobId}] Erro ao extrair áudio: ${e.message}`);
+            jobs[jobId] = { status: 'failed', error: e.message };
+            safeDeleteFiles(allTempFiles); // Limpa tudo em caso de erro
         }
-
-        const outputPath = path.join(processedDir, `audio-ext-${Date.now()}.wav`);
-        allTempFiles.push(outputPath);
-        await runFFmpeg(`ffmpeg -i "${videoPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y "${outputPath}"`);
-        
-        res.sendFile(outputPath, (err) => {
-            if (err) console.error('Erro ao enviar áudio:', err);
-            safeDeleteFiles(allTempFiles);
-        });
-    } catch (e) {
-        console.error(`Erro em /extrair-audio: ${e.message}`);
-        safeDeleteFiles(allTempFiles);
-        res.status(500).send(e.message);
-    }
+    });
 });
+
 
 app.post('/transcrever-audio', upload.fields([ { name: 'audio', maxCount: 1 }, { name: 'googleCreds', maxCount: 1 }, { name: 'languageCode', maxCount: 1 } ]), async (req, res) => {
     const audioFile = req.files.audio?.[0];
@@ -1071,7 +1083,7 @@ app.post('/transcrever-audio', upload.fields([ { name: 'audio', maxCount: 1 }, {
 });
 
 app.post('/extrair-frames', upload.single('video'), (req, res) => {
-    const jobId = `job_${Date.now()}`;
+    const jobId = `frames_job_${Date.now()}`;
     jobs[jobId] = { status: 'pending' };
 
     res.json({ success: true, jobId: jobId });
@@ -1088,7 +1100,7 @@ app.post('/extrair-frames', upload.single('video'), (req, res) => {
                 videoPath = req.file.path;
             } else if (req.body.url) {
                 const videoUrl = req.body.url;
-                videoPath = path.join(uploadDir, `download_frames_${Date.now()}.mp4`);
+                videoPath = path.join(uploadDir, `download_frames_${jobId}.mp4`);
                 allTempFiles.push(videoPath);
                 await youtubedl.exec(videoUrl, { output: videoPath, format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' });
             } else {
@@ -1253,7 +1265,9 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
         } catch (e) {
             jobs[jobId] = { status: 'failed', error: e.message };
         } finally {
-            safeDeleteFiles(allTempFiles);
+            if (jobs[jobId]?.status === 'failed') {
+                safeDeleteFiles(allTempFiles);
+            }
         }
     });
 });
@@ -1263,4 +1277,5 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
