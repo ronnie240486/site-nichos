@@ -26,7 +26,7 @@ if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir);
 // 3. Middlewares
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-// IMPORTANTE: Servir ficheiros estáticos para que APIs externas (como Replicate) possam ler os uploads
+// IMPORTANTE: Servir ficheiros estáticos para que APIs externas possam ler os uploads
 app.use('/downloads', express.static(processedDir));
 app.use('/uploads', express.static(uploadDir));
 
@@ -44,7 +44,7 @@ const upload = multer({ storage: storage });
 function runFFmpeg(command) {
     return new Promise((resolve, reject) => {
         console.log(`Executando FFmpeg: ${command}`);
-        exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => { // Aumenta o buffer
+        exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
             if (error) {
                 console.error(`FFmpeg Stderr: ${stderr}`);
                 return reject(new Error(`Erro no FFmpeg: ${stderr || 'Erro desconhecido'}`));
@@ -83,8 +83,7 @@ function safeDeleteFiles(files) {
 function getEffectFilter(transition, duration, dValue, width, height) {
     switch (transition) {
         case 'frei0r.filter.blackwhite': return `frei0r=filter_name=blackwhite`;
-        // Adicione outros casos de filtro aqui se necessário
-        default: // Efeito Ken Burns como padrão para imagens
+        default: // Efeito Ken Burns como padrão
             return `zoompan=z='min(zoom+0.001,1.1)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
     }
 }
@@ -112,8 +111,7 @@ app.get('/job-result/:jobId', (req, res) => {
         if (job.result.isFilePath) {
             res.sendFile(job.result.data, (err) => {
                 if (err) console.error(`Erro ao enviar ficheiro do job ${jobId}:`, err);
-                // A limpeza do ficheiro agora é responsabilidade de quem o criou ou agendada
-                 delete jobs[jobId];
+                delete jobs[jobId];
             });
         } else {
             res.json(job.result.data);
@@ -125,9 +123,9 @@ app.get('/job-result/:jobId', (req, res) => {
 });
 
 
-// --- ROTAS DO IA TURBO ---
+// --- ROTAS DO IA TURBO E GERAIS ---
 
-// Alterado para upload.any() para aceitar tanto 'video' (IA Turbo) quanto 'videos' (Ferramenta Genérica)
+// CORREÇÃO CRÍTICA: upload.any() aceita qualquer nome de campo ('video' ou 'videos')
 app.post('/extrair-audio', upload.any(), (req, res) => {
     const jobId = `audio_job_${Date.now()}`;
     jobs[jobId] = { status: 'pending' };
@@ -228,7 +226,7 @@ app.post('/transcrever-audio', upload.fields([ { name: 'audio', maxCount: 1 }, {
     });
 });
 
-// Alterado para upload.any() para evitar erros de campo inesperado
+// CORREÇÃO CRÍTICA: upload.any() aqui também
 app.post('/extrair-frames', upload.any(), (req, res) => {
     const jobId = `frames_job_${Date.now()}`;
     jobs[jobId] = { status: 'pending' };
@@ -239,7 +237,6 @@ app.post('/extrair-frames', upload.any(), (req, res) => {
         let videoPath = null;
         let allTempFiles = [];
         
-        // Lógica para encontrar o ficheiro independentemente do nome do campo
         const file = req.files && req.files.length > 0 ? req.files[0] : null;
         if (file) allTempFiles.push(file.path);
 
@@ -422,6 +419,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
         }
     });
 });
+
 
 // --- ROTAS DE FERRAMENTAS GERAIS ---
 app.post('/cortar-video', upload.array('videos'), async (req, res) => {
@@ -739,7 +737,6 @@ app.post('/render-timeline', upload.fields([
     }
 });
 
-// ROTA REAL PARA GERAR MÚSICA COM REPLICATE (ASSÍNCRONA)
 app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     const allTempFiles = (req.files || []).map(f => f.path);
     try {
