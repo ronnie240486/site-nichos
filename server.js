@@ -646,7 +646,7 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
 });
 
 // --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA E FINAL) ---
-app.post('/workflow-magico', upload.fields([
+app.post('/workflow-magico-avancado', upload.fields([
     { name: 'logo', maxCount: 1 },
     { name: 'intro', maxCount: 1 },
     { name: 'outro', maxCount: 1 }
@@ -1270,7 +1270,6 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
-
 
 
 
