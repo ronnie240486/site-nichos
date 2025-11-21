@@ -127,7 +127,8 @@ app.get('/job-result/:jobId', (req, res) => {
 
 // --- ROTAS DO IA TURBO ---
 
-app.post('/extrair-audio', upload.single('video'), (req, res) => {
+// Alterado para upload.any() para aceitar tanto 'video' (IA Turbo) quanto 'videos' (Ferramenta Genérica)
+app.post('/extrair-audio', upload.any(), (req, res) => {
     const jobId = `audio_job_${Date.now()}`;
     jobs[jobId] = { status: 'pending' };
 
@@ -136,12 +137,15 @@ app.post('/extrair-audio', upload.single('video'), (req, res) => {
     setImmediate(async () => {
         let videoPath = null;
         let allTempFiles = [];
-        if (req.file) allTempFiles.push(req.file.path);
+        
+        // Lógica para encontrar o ficheiro independentemente do nome do campo
+        const file = req.files && req.files.length > 0 ? req.files[0] : null;
+        if (file) allTempFiles.push(file.path);
 
         try {
             jobs[jobId].status = 'processing';
-            if (req.file) {
-                videoPath = req.file.path;
+            if (file) {
+                videoPath = file.path;
             } else if (req.body.url) {
                 const videoUrl = req.body.url;
                 videoPath = path.join(uploadDir, `download_audio_${jobId}.mp4`);
@@ -224,7 +228,8 @@ app.post('/transcrever-audio', upload.fields([ { name: 'audio', maxCount: 1 }, {
     });
 });
 
-app.post('/extrair-frames', upload.single('video'), (req, res) => {
+// Alterado para upload.any() para evitar erros de campo inesperado
+app.post('/extrair-frames', upload.any(), (req, res) => {
     const jobId = `frames_job_${Date.now()}`;
     jobs[jobId] = { status: 'pending' };
 
@@ -233,13 +238,16 @@ app.post('/extrair-frames', upload.single('video'), (req, res) => {
     setImmediate(async () => {
         let videoPath = null;
         let allTempFiles = [];
-        if (req.file) allTempFiles.push(req.file.path);
+        
+        // Lógica para encontrar o ficheiro independentemente do nome do campo
+        const file = req.files && req.files.length > 0 ? req.files[0] : null;
+        if (file) allTempFiles.push(file.path);
 
         try {
             jobs[jobId].status = 'processing';
 
-            if (req.file) {
-                videoPath = req.file.path;
+            if (file) {
+                videoPath = file.path;
             } else if (req.body.url) {
                 const videoUrl = req.body.url;
                 videoPath = path.join(uploadDir, `download_frames_${jobId}.mp4`);
@@ -407,6 +415,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
         } catch (e) {
             jobs[jobId] = { status: 'failed', error: e.message };
         } finally {
+            // A limpeza agora é feita pelo /job-result, exceto em caso de falha total
             if (jobs[jobId]?.status === 'failed') {
                 safeDeleteFiles(allTempFiles);
             }
@@ -730,6 +739,7 @@ app.post('/render-timeline', upload.fields([
     }
 });
 
+// ROTA REAL PARA GERAR MÚSICA COM REPLICATE (ASSÍNCRONA)
 app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
     const allTempFiles = (req.files || []).map(f => f.path);
     try {
@@ -771,7 +781,6 @@ app.post('/separar-faixas', upload.array('videos'), async (req, res) => {
     if (files.length === 0) { return res.status(400).send('Nenhum ficheiro de áudio enviado.'); }
     const allTempFiles = files.map(f => f.path);
     try {
-        const processedFiles = [];
         for (const file of files) { console.log(`Processando separação de faixas para: ${file.filename}`); }
         console.log("Faixas separadas com sucesso (simulação).");
         safeDeleteFiles(allTempFiles);
@@ -891,7 +900,7 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
-// --- ROTA CORRIGIDA: WORKFLOW MÁGICO ---
+// --- ROTA DO WORKFLOW MÁGICO (AGORA CORRIGIDA E COMPLETA) ---
 app.post('/workflow-magico', upload.fields([ { name: 'logo', maxCount: 1 }, { name: 'intro', maxCount: 1 }, { name: 'outro', maxCount: 1 } ]), async (req, res) => {
     const { topic, settings: settingsStr } = req.body;
     const settings = JSON.parse(settingsStr);
@@ -1074,6 +1083,7 @@ app.post('/inpainting', upload.fields([ { name: 'image', maxCount: 1 }, { name: 
         if (!res.headersSent) { res.status(500).send(`Erro interno no Inpainting: ${error.message}`); }
     }
 });
+
 
 app.post("/download", async (req, res) => {
   try {
