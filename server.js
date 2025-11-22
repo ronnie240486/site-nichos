@@ -38,7 +38,7 @@ const storage = multer.diskStorage({
     }
 });
 
-// Configuração relaxada do Multer (Aceita qualquer ficheiro)
+// Configuração relaxada do Multer (Aceita qualquer ficheiro de qualquer campo)
 const upload = multer({ storage: storage });
 
 // 4. Funções Auxiliares
@@ -85,6 +85,30 @@ function getEffectFilter(transition, duration, dValue, width, height) {
         case 'frei0r.filter.blackwhite': return `frei0r=filter_name=blackwhite`;
         default: // Efeito Ken Burns
             return `zoompan=z='min(zoom+0.001,1.1)':d=${dValue}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`;
+    }
+}
+
+function sendZipResponse(res, filesToZip, allTempFiles) {
+    if (filesToZip.length === 1) {
+        res.sendFile(filesToZip[0].path, (err) => {
+            if (err) console.error('Erro ao enviar ficheiro:', err);
+            safeDeleteFiles(allTempFiles);
+        });
+    } else {
+        const zipPath = path.join(processedDir, `resultado-${Date.now()}.zip`);
+        const output = fs.createWriteStream(zipPath);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+
+        output.on('close', () => {
+            res.sendFile(zipPath, (err) => {
+                if (err) console.error('Erro ao enviar zip:', err);
+                safeDeleteFiles([...allTempFiles, zipPath]);
+            });
+        });
+        archive.on('error', (err) => { throw err; });
+        archive.pipe(output);
+        filesToZip.forEach(f => archive.file(f.path, { name: f.name }));
+        archive.finalize();
     }
 }
 
