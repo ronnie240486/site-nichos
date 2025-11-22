@@ -15,7 +15,7 @@ const youtubedl = require("youtube-dl-exec");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Objeto para guardar o estado dos trabalhos em background
+// ** CORREÇÃO IMPORTANTE **: Objeto para guardar o estado dos trabalhos em background
 const jobs = {};
 
 const uploadDir = path.join(__dirname, 'uploads');
@@ -38,7 +38,7 @@ const storage = multer.diskStorage({
     }
 });
 
-// Configuração relaxada do Multer (Aceita qualquer ficheiro de qualquer campo)
+// Configuração relaxada do Multer (Aceita qualquer ficheiro de qualquer campo para evitar erros)
 const upload = multer({ storage: storage });
 
 // 4. Funções Auxiliares
@@ -145,19 +145,18 @@ app.get('/job-result/:jobId', (req, res) => {
     }
 });
 
-// --- ROTA CRÍTICA: WORKFLOW MÁGICO ---
+// --- ROTA DO WORKFLOW MÁGICO ---
 app.post('/workflow-magico', upload.any(), async (req, res) => {
     const { topic, settings: settingsStr } = req.body;
     let settings = {};
     try {
-        settings = JSON.parse(settingsStr);
+        settings = JSON.parse(settingsStr || '{}');
     } catch (e) {
         return res.status(400).send("Configurações inválidas.");
     }
 
     let allTempFiles = [];
     
-    // Mapeamento manual dos ficheiros (porque usamos upload.any())
     const logoFile = req.files ? req.files.find(f => f.fieldname === 'logo') : null;
     const introFile = req.files ? req.files.find(f => f.fieldname === 'intro') : null;
     const outroFile = req.files ? req.files.find(f => f.fieldname === 'outro') : null;
@@ -317,10 +316,10 @@ app.post('/workflow-magico', upload.any(), async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Erro no Workflow Mágico Avançado:', error);
+        console.error('Erro no Workflow Mágico:', error);
         safeDeleteFiles(allTempFiles);
         if (!res.headersSent) {
-            res.status(500).send(`Erro interno no Workflow Mágico: ${error.message}`);
+            res.status(500).send(`Erro interno: ${error.message}`);
         }
     }
 });
@@ -335,7 +334,8 @@ app.post('/extrair-audio', upload.any(), (req, res) => {
     setImmediate(async () => {
         let videoPath = null;
         let allTempFiles = [];
-        const file = req.files ? req.files.find(f => f.fieldname === 'video' || f.fieldname === 'videos') || req.files[0] : null;
+        
+        const file = req.files ? (req.files.find(f => f.fieldname === 'video' || f.fieldname === 'videos') || req.files[0]) : null;
         if (file) allTempFiles.push(file.path);
 
         try {
@@ -372,7 +372,7 @@ app.post('/transcrever-audio', upload.any(), (req, res) => {
     res.json({ success: true, jobId: jobId });
 
     setImmediate(async () => {
-        const audioFile = req.files ? req.files.find(f => f.fieldname === 'audio') || req.files[0] : null;
+        const audioFile = req.files ? (req.files.find(f => f.fieldname === 'audio') || req.files[0]) : null;
         const { googleCreds, languageCode = 'pt-BR' } = req.body;
         const allTempFiles = [];
         if (audioFile) allTempFiles.push(audioFile.path);
@@ -415,7 +415,7 @@ app.post('/extrair-frames', upload.any(), (req, res) => {
     setImmediate(async () => {
         let videoPath = null;
         let allTempFiles = [];
-        const file = req.files ? req.files.find(f => f.fieldname === 'video') || req.files[0] : null;
+        const file = req.files ? (req.files.find(f => f.fieldname === 'video') || req.files[0]) : null;
         if (file) allTempFiles.push(file.path);
 
         try {
@@ -494,7 +494,6 @@ const handleVideoMixingJob = (req, res) => {
                  const chunkPath = path.join(processedDir, `chunk_${jobId}_${i}.mp4`);
                  allTempFiles.push(chunkPath);
                  
-                 // Duração fixa por imagem por agora (para simplificar)
                  const dur = 5; 
                  await runFFmpeg(`ffmpeg -loop 1 -i "${imagePath}" -c:v libx264 -t ${dur} -pix_fmt yuv420p -vf "scale=${videoWidth}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${videoWidth}:${videoHeight}:-1:-1,setsar=1" -y "${chunkPath}"`);
                  blockVideoPaths.push(chunkPath);
@@ -579,7 +578,7 @@ app.post('/comprimir-videos', upload.any(), async (req, res) => {
     try {
         const quality = req.body.quality;
         const crfMap = { alta: '18', media: '23', baixa: '28' };
-        const crf = crfMap[quality];
+        const crf = Map[quality];
         if (!crf) throw new Error('Qualidade inválida.');
 
         const processedFiles = [];
@@ -640,7 +639,6 @@ app.post('/remover-audio', upload.any(), async (req, res) => {
     }
 });
 
-// Ferramentas de Áudio
 app.post('/unir-audio', upload.any(), async (req, res) => {
     const files = req.files || [];
     if (files.length < 2) return res.status(400).send('Mínimo 2 áudios.');
@@ -903,7 +901,6 @@ app.post('/clonar-voz', upload.any(), async (req, res) => {
     try {
         const elevenlabsApiKey = process.env.ELEVENLABS_API_KEY || req.headers['x-elevenlabs-api-key'];
         if (!elevenlabsApiKey) { throw new Error("A chave da API da ElevenLabs não está configurada."); }
-        console.log("Iniciando processo de clonagem de voz...");
         const formData = new FormData();
         formData.append('name', `VozClonada_${Date.now()}`);
         formData.append('files', fs.createReadStream(audioFile.path), audioFile.originalname);
@@ -922,7 +919,6 @@ app.post('/clonar-voz', upload.any(), async (req, res) => {
             safeDeleteFiles(allTempFiles);
         });
     } catch (error) {
-        console.error('Erro no processo de clonagem de voz:', error);
         safeDeleteFiles(allTempFiles);
         if (!res.headersSent) res.status(500).send(`Erro interno na clonagem de voz: ${error.message}`);
     }
