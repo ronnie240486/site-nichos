@@ -471,7 +471,7 @@ const handleVideoMixingJob = (req, res) => {
         let allTempFiles = [];
         if (narrationFile) allTempFiles.push(narrationFile.path);
 
-        try {
+       try {
             if (!narrationFile || !images || !script) throw new Error('Dados insuficientes.');
             jobs[jobId].status = 'processing';
             jobs[jobId].progress = '10%';
@@ -482,7 +482,7 @@ const handleVideoMixingJob = (req, res) => {
             const videoWidth = videoType === 'short' ? 1080 : 1920;
             const videoHeight = videoType === 'short' ? 1920 : 1080;
             
-            // Lógica simplificada de mixagem
+            // 1. Geração e concatenação de imagens em vídeo mudo (visualPath)
             const blockVideoPaths = [];
             for (let i = 0; i < imageArray.length; i++) {
                  const dataUrl = imageArray[i];
@@ -498,6 +498,8 @@ const handleVideoMixingJob = (req, res) => {
                  await runFFmpeg(`ffmpeg -loop 1 -i "${imagePath}" -c:v libx264 -t ${dur} -pix_fmt yuv420p -vf "scale=${videoWidth}:${videoHeight}:force_original_aspect_ratio=decrease,pad=${videoWidth}:${videoHeight}:-1:-1,setsar=1" -y "${chunkPath}"`);
                  blockVideoPaths.push(chunkPath);
             }
+            
+            jobs[jobId].progress = '50%';
 
             const finalListPath = path.join(uploadDir, `list-${jobId}.txt`);
             const fileContent = blockVideoPaths.map(p => `file '${p.replace(/'/g, "'\\''")}'`).join('\n');
@@ -508,8 +510,13 @@ const handleVideoMixingJob = (req, res) => {
             allTempFiles.push(finalSilentPath);
             await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${finalListPath}" -c copy -y "${finalSilentPath}"`);
 
+            // 2. Mixagem Final (CORREÇÃO DE CODEC APLICADA AQUI)
+            jobs[jobId].progress = '80%';
             const outputPath = path.join(processedDir, `video-final-${jobId}.mp4`);
-            await runFFmpeg(`ffmpeg -i "${finalSilentPath}" -i "${narrationFile.path}" -c:v copy -c:a aac -shortest -y "${outputPath}"`);
+            
+            // Comando Corrigido: Re-codifica o vídeo e o áudio para garantir MP4/AAC/H264
+            // c:v libx264 e c:a aac são os codecs mais compatíveis com navegadores.
+            await runFFmpeg(`ffmpeg -i "${finalSilentPath}" -i "${narrationFile.path}" -map 0:v:0 -map 1:a:0 -c:v libx264 -crf 23 -c:a aac -b:a 128k -shortest -y "${outputPath}"`);
 
             jobs[jobId] = { 
                 status: 'completed', 
@@ -522,8 +529,6 @@ const handleVideoMixingJob = (req, res) => {
         } finally {
             if (jobs[jobId]?.status === 'failed') safeDeleteFiles(allTempFiles);
         }
-    });
-};
 
 app.post('/mixar-video-turbo-advanced', upload.any(), handleVideoMixingJob);
 app.post('/criar-video-automatico', upload.any(), handleVideoMixingJob);
@@ -1017,4 +1022,5 @@ app.post("/video-info", async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
