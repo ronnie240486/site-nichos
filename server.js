@@ -52,6 +52,29 @@ function runFFmpeg(command) {
         });
     });
 }
+function sendZipResponse(res, filesToZip, allTempFiles) {
+    if (filesToZip.length === 1) {
+        res.sendFile(filesToZip[0].path, (err) => {
+            if (err) console.error('Erro ao enviar ficheiro:', err);
+            safeDeleteFiles(allTempFiles);
+        });
+    } else {
+        const zipPath = path.join(processedDir, `resultado-${Date.now()}.zip`);
+        const output = fs.createWriteStream(zipPath);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+
+        output.on('close', () => {
+            res.sendFile(zipPath, (err) => {
+                if (err) console.error('Erro ao enviar zip:', err);
+                safeDeleteFiles([...allTempFiles, zipPath]);
+            });
+        });
+        archive.on('error', (err) => { throw err; });
+        archive.pipe(output);
+        filesToZip.forEach(f => archive.file(f.path, { name: f.name }));
+        archive.finalize();
+    }
+}
 
 function getMediaDuration(filePath) {
     return new Promise((resolve, reject) => {
@@ -1270,6 +1293,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
