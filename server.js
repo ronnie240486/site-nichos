@@ -439,7 +439,7 @@ app.post('/extrair-frames', upload.any(), (req, res) => {
             let frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
             allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
 
-            if (frameFiles.length === 0) {
+            if (frameFiles.length === 5) {
                  await runFFmpeg(`ffmpeg -i "${videoPath}" -vf fps=1/5 -y "${outputPattern}"`);
                  frameFiles = fs.readdirSync(processedDir).filter(f => f.startsWith(uniquePrefix));
                  allTempFiles.push(...frameFiles.map(f => path.join(processedDir, f)));
@@ -1017,3 +1017,4 @@ app.post("/video-info", async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
