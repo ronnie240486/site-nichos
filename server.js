@@ -700,6 +700,81 @@ app.post('/gerar-sfx', upload.none(), async (req, res) => {
     }
 });
 
+// ==========================================
+//  ROTA: EDITOR AUTOMÁTICO / RENDERIZAR
+// ==========================================
+app.post('/renderizar-editor-automatico', upload.any(), (req, res) => {
+    const jobId = `auto_edit_${Date.now()}`;
+    jobs[jobId] = { status: 'pending', progress: '0%' };
+    res.json({ success: true, jobId });
+
+    setImmediate(async () => {
+        const narrationFile = req.files ? req.files.find(f => f.fieldname === 'audio') : null;
+        const { mediaUrls } = req.body; 
+        let allTempFiles = [];
+        if (narrationFile) allTempFiles.push(narrationFile.path);
+
+        try {
+            if (!narrationFile || !mediaUrls) throw new Error('Áudio ou mídia em falta.');
+            jobs[jobId].status = 'processing';
+            jobs[jobId].progress = '10%';
+
+            const urls = JSON.parse(mediaUrls);
+            const mediaPaths = [];
+
+            // 1. Descarregar Mídia
+            for (let i = 0; i < urls.length; i++) {
+                const url = urls[i];
+                const ext = url.includes('.mp4') ? 'mp4' : 'jpg';
+                const tempPath = path.join(uploadDir, `media_${jobId}_${i}.${ext}`);
+                allTempFiles.push(tempPath);
+                
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`Falha ao baixar media: ${url}`);
+                const buffer = await response.buffer();
+                fs.writeFileSync(tempPath, buffer);
+                
+                const normPath = path.join(processedDir, `norm_${jobId}_${i}.mp4`);
+                allTempFiles.push(normPath);
+                
+                if (ext === 'jpg' || ext === 'png') {
+                    await runFFmpeg(`ffmpeg -loop 1 -i "${tempPath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -y "${normPath}"`);
+                } else {
+                    await runFFmpeg(`ffmpeg -i "${tempPath}" -c:v libx264 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -an -y "${normPath}"`);
+                }
+                mediaPaths.push(normPath);
+                jobs[jobId].progress = `${10 + Math.round(40 * ((i+1)/urls.length))}%`;
+            }
+
+            // 2. Concatenar Vídeos
+            jobs[jobId].progress = '60%';
+            const listPath = path.join(uploadDir, `list_${jobId}.txt`);
+            const listContent = mediaPaths.map(p => `file '${p}'`).join('\n');
+            fs.writeFileSync(listPath, listContent);
+            allTempFiles.push(listPath);
+
+            const visualPath = path.join(processedDir, `visual_${jobId}.mp4`);
+            allTempFiles.push(visualPath);
+            await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${listPath}" -c copy -y "${visualPath}"`);
+
+            // 3. Mixar Final (CORREÇÃO DE CODEC APLICADA)
+            jobs[jobId].progress = '80%';
+            const finalPath = path.join(processedDir, `final_${jobId}.mp4`);
+            
+            // CORREÇÃO: Re-codifica o vídeo e o áudio para garantir compatibilidade (MP4/AAC/H264)
+            await runFFmpeg(`ffmpeg -i "${visualPath}" -i "${narrationFile.path}" -map 0:v:0 -map 1:a:0 -c:v libx264 -crf 23 -c:a aac -b:a 128k -shortest -y "${finalPath}"`);
+
+            jobs[jobId] = { status: 'completed', progress: '100%', result: { isFilePath: true, data: finalPath } };
+
+        } catch (e) {
+            console.error(`[Job ${jobId}] Erro:`, e);
+            jobs[jobId] = { status: 'failed', error: e.message };
+        } finally {
+             safeDeleteFiles(allTempFiles);
+        }
+    });
+});
+
 // --- ROTA PARA WORKFLOW MÁGICO (VERSÃO SUPER AVANÇADA E FINAL) ---
 app.post('/workflow-magico-avancado', upload.fields([
     { name: 'logo', maxCount: 1 },
@@ -1333,6 +1408,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
