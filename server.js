@@ -373,163 +373,148 @@ app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
-// --- ROTA CORRIGIDA E ROBUSTA: EDITOR DE VÍDEO (TIMELINE) ---
-app.post('/render-timeline', upload.any(), (req, res) => {
-    const jobId = `timeline_${Date.now()}`;
-    jobs[jobId] = { status: 'pending' };
-    res.json({ success: true, jobId });
+//  ENDPOINT: RENDER TIMELINE
+// --------------------------
+app.post("/render-timeline", upload.single("narration"), async (req, res) => {
+    try {
+        const jobId = Date.now().toString();
 
-    // 1. CAPTURA DE DADOS IMEDIATA
-    const files = req.files || [];
-    const body = req.body || {};
-    console.log("REQ.FILES ===>", req.files);
-    console.log("REQ.BODY ===>", req.body);
+        const mediaItems = JSON.parse(req.body.mediaItems || "[]");
+        const narrationFile = req.file ? req.file.path : null;
 
-    const audioFile = files.find(f => f.fieldname === 'audio' || f.fieldname === 'narration' || f.mimetype.startsWith('audio/'));
+        jobs[jobId] = {
+            status: "processing",
+            progress: "iniciando..."
+        };
 
-    let mediaFiles = files.filter(f => f !== audioFile);
+        console.log(`[JOB ${jobId}] Iniciado`);
 
-    console.log(`[Job ${jobId}] Recebido. Ficheiros: ${files.length} (Media: ${mediaFiles.length}, Audio: ${!!audioFile})`);
+        // PROCESSAMENTO EM SEGUNDO PLANO
+        processTimeline(jobId, mediaItems, narrationFile);
 
-    setImmediate(async () => {
-        let tempFilesToDelete = files.map(f => f.path);
+        res.json({ jobId });
 
-        try {
-            jobs[jobId].status = 'processing';
-
-            // Tenta ler o payload
-            let data = {};
-            if (body.payload) {
-                try { data = JSON.parse(body.payload); } catch (e) {}
-            } else {
-                data = body;
-            }
-
-            const { clips } = data;
-
-            // Leitura de mediaItems (URLs)
-            let mediaItems = [];
-            if (body.mediaItems) {
-                try {
-                    mediaItems = JSON.parse(body.mediaItems);
-                } catch (e) {
-                    console.error("Falha ao parsear mediaItems:", e);
-                }
-            }
-
-            let remotePaths = [];
-            if (Array.isArray(mediaItems) && mediaItems.length > 0) {
-                remotePaths = mediaItems.map(item => item.url).filter(Boolean);
-            }
-
-            if (mediaFiles.length === 0 && remotePaths.length === 0 && (!clips || clips.length === 0)) {
-                throw new Error('Nenhum conteúdo (vídeo/imagem) encontrado para processar.');
-            }
-
-            // Construção das paths
-            let orderedFilePaths = [];
-
-            if (clips && clips.length > 0) {
-                const filesByName = mediaFiles.reduce((acc, file) => {
-                    acc[file.originalname] = file.path;
-                    return acc;
-                }, {});
-
-                orderedFilePaths = clips
-                    .map(c => filesByName[c.originalName] || c.path || c.url)
-                    .filter(p => p);
-            }
-
-            if (orderedFilePaths.length === 0 && mediaFiles.length > 0) {
-                orderedFilePaths = mediaFiles.map(f => f.path);
-            }
-
-            if (orderedFilePaths.length === 0 && remotePaths.length > 0) {
-                orderedFilePaths = remotePaths;
-            }
-
-            if (orderedFilePaths.length === 0) {
-                throw new Error("Lista final de ficheiros está vazia.");
-            }
-
-            // 2. Normalizar Clips
-            const videoClips = [];
-
-            for (let i = 0; i < orderedFilePaths.length; i++) {
-                const filePath = orderedFilePaths[i];
-                const isImage = filePath.match(/\.(jpg|jpeg|png|webp)$/i) ||
-                               (clips && clips[i] && clips[i].type === 'image');
-
-                const outputPath = path.join(processedDir, `clip_${jobId}_${i}.mp4`);
-                tempFilesToDelete.push(outputPath);
-
-                if (isImage) {
-                    await runFFmpeg(`ffmpeg -loop 1 -i "${filePath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -y "${outputPath}"`);
-                } else {
-                    await runFFmpeg(`ffmpeg -i "${filePath}" -c:v libx264 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -an -y "${outputPath}"`);
-                }
-
-                videoClips.push(outputPath);
-            }
-
-            // 3. Concatenar
-            const silentVideoPath = path.join(processedDir, `timeline_silent_${jobId}.mp4`);
-            tempFilesToDelete.push(silentVideoPath);
-
-            const listPath = path.join(uploadDir, `list_${jobId}.txt`);
-            const listContent = videoClips.map(p => `file '${p}'`).join('\n');
-            fs.writeFileSync(listPath, listContent);
-            tempFilesToDelete.push(listPath);
-
-            await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${listPath}" -c copy -y "${silentVideoPath}"`);
-
-            // -----------------------------
-            // 4. Mixar Áudio Final (CORRIGIDO)
-            // -----------------------------
-            const finalOutputPath = path.join(processedDir, `timeline_final_${jobId}.mp4`);
-            // NÃO adicionar finalOutputPath ao tempFilesToDelete
-
-            let command = `ffmpeg -i "${silentVideoPath}"`;
-            let audioArgs = "";
-
-            if (audioFile) {
-                command += ` -i "${audioFile.path}"`;
-                audioArgs = `-map 0:v:0 -map 1:a:0 -c:a aac -b:a 128k`;
-            } else {
-                audioArgs = `-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -map 0:v:0 -map 1:a:0 -c:a aac -shortest`;
-            }
-
-            await runFFmpeg(
-                `${command} ${audioArgs} -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart -y "${finalOutputPath}"`
-            );
-
-            // GARANTIR QUE NÃO SERÁ APAGADO
-            tempFilesToDelete = tempFilesToDelete.filter(p => p !== finalOutputPath);
-
-            jobs[jobId] = {
-                status: 'completed',
-                result: { isFilePath: true, data: finalOutputPath }
-            };
-
-        } catch (error) {
-            console.error(`[Job ${jobId}] Erro:`, error);
-            jobs[jobId] = { status: 'failed', error: error.message };
-        } finally {
-            safeDeleteFiles(tempFilesToDelete);
-        }
-    });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// --- ROTA PARA DOWNLOAD DO ARQUIVO FINAL ---
-app.get("/download/:jobId", (req, res) => {
-    const job = jobs[req.params.jobId];
-    if (!job || job.status !== "completed") {
-        return res.status(404).json({ error: "Job não encontrado ou não está pronto." });
-    }
+// --------------------------
+//  FUNÇÃO QUE PROCESSA O JOB
+// --------------------------
+async function processTimeline(jobId, mediaItems, narration) {
+    let tempFiles = [];
 
-    const filePath = job.result.data;
-    console.log("Enviando arquivo:", filePath);
-    res.download(filePath);
+    try {
+        // 1. Processar cada vídeo
+        const clips = [];
+
+        for (let i = 0; i < mediaItems.length; i++) {
+            const item = mediaItems[i];
+
+            const outputClip = path.join(
+                processedDir,
+                `clip_${jobId}_${i}.mp4`
+            );
+
+            tempFiles.push(outputClip);
+
+            const cmd = `
+                ffmpeg -i "${item.url}" \
+                -c:v libx264 -pix_fmt yuv420p \
+                -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=30" \
+                -an -y "${outputClip}"
+            `;
+
+            await runFFmpeg(cmd);
+
+            clips.push(outputClip);
+
+            jobs[jobId].progress = `${i + 1}/${mediaItems.length}`;
+        }
+
+        // 2. Criar lista TXT
+        const listPath = path.join(processedDir, `list_${jobId}.txt`);
+        tempFiles.push(listPath);
+
+        fs.writeFileSync(listPath, clips.map(c => `file '${c}'`).join("\n"));
+
+        // 3. Concatenar vídeos
+        const concatOutput = path.join(processedDir, `concat_${jobId}.mp4`);
+        tempFiles.push(concatOutput);
+
+        await runFFmpeg(`
+            ffmpeg -f concat -safe 0 -i "${listPath}" \
+            -c:v libx264 -pix_fmt yuv420p \
+            -y "${concatOutput}"
+        `);
+
+        // 4. Mixar Áudio FINAL
+        const finalOutput = path.join(processedDir, `timeline_final_${jobId}.mp4`);
+
+        // ⚠ NÃO ADICIONAR O FINAL ao tempFiles
+        // tempFiles.push(finalOutput);  <-- removido
+
+        let audioCmd = "";
+        if (narration) {
+            audioCmd = `
+                -i "${narration}" -filter_complex \
+                "[1:a]volume=1.0[a1];[0:a][a1]amix=inputs=2:dropout_transition=2" \
+                -map 0:v -map "[a1]"
+            `;
+        } else {
+            audioCmd = "-an";
+        }
+
+        await runFFmpeg(`
+            ffmpeg -i "${concatOutput}" ${
+                narration ? `-i "${narration}"` : ""
+            } \
+            -c:v libx264 -crf 23 -preset fast -pix_fmt yuv420p \
+            ${audioCmd} \
+            -movflags +faststart -y "${finalOutput}"
+        `);
+
+        // 🔥 GARANTE QUE O RESULTADO É MANTIDO
+        jobs[jobId] = {
+            status: "completed",
+            resultPath: finalOutput
+        };
+
+    } catch (err) {
+        console.error("Erro no processamento:", err);
+        jobs[jobId] = { status: "failed", error: err.message };
+    } finally {
+        // ❗ APAGA SOMENTE TEMPORÁRIOS
+        tempFiles.forEach(f => safeDelete(f));
+    }
+}
+
+// --------------------------
+//  ENDPOINT STATUS
+// --------------------------
+app.get("/job-status/:id", (req, res) => {
+    const job = jobs[req.params.id];
+    if (!job) return res.status(404).json({ error: "job not found" });
+
+    res.json(job);
+});
+
+// --------------------------
+//  ENDPOINT DOWNLOAD FINAL
+// --------------------------
+app.get("/download/:id", (req, res) => {
+    const job = jobs[req.params.id];
+
+    if (!job || job.status !== "completed")
+        return res.status(404).json({ error: "resultado não encontrado" });
+
+    const file = job.resultPath;
+
+    if (!fs.existsSync(file))
+        return res.status(404).json({ error: "arquivo final não existe" });
+
+    res.download(file, "video-final.mp4");
 });
 
 
@@ -1393,6 +1378,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
