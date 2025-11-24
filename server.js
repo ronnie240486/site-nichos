@@ -379,17 +379,14 @@ app.post('/render-timeline', upload.any(), (req, res) => {
     jobs[jobId] = { status: 'pending' };
     res.json({ success: true, jobId });
 
-    // 1. CAPTURA DE DADOS IMEDIATA (Blindagem contra perda de dados)
+    // 1. CAPTURA DE DADOS IMEDIATA
     const files = req.files || [];
     const body = req.body || {};
     console.log("REQ.FILES ===>", req.files);
     console.log("REQ.BODY ===>", req.body);
 
-
-    // Tenta encontrar áudio em qualquer campo possível
     const audioFile = files.find(f => f.fieldname === 'audio' || f.fieldname === 'narration' || f.mimetype.startsWith('audio/'));
-    
-    // Tenta encontrar vídeos/imagens (tudo que não for o áudio identificado)
+
     let mediaFiles = files.filter(f => f !== audioFile);
 
     console.log(`[Job ${jobId}] Recebido. Ficheiros: ${files.length} (Media: ${mediaFiles.length}, Audio: ${!!audioFile})`);
@@ -400,88 +397,78 @@ app.post('/render-timeline', upload.any(), (req, res) => {
         try {
             jobs[jobId].status = 'processing';
 
-            // Tenta ler o payload de várias formas
-let data = {};
-if (body.payload) {
-    try { data = JSON.parse(body.payload); } catch(e) {}
-} else {
-    data = body;
-}
+            // Tenta ler o payload
+            let data = {};
+            if (body.payload) {
+                try { data = JSON.parse(body.payload); } catch (e) {}
+            } else {
+                data = body;
+            }
 
-const { clips } = data;
+            const { clips } = data;
 
-// NOVO: tentar ler mediaItems (JSON com URLs) vindo do front
-let mediaItems = [];
-if (body.mediaItems) {
-    try {
-        mediaItems = JSON.parse(body.mediaItems); // [{ url, type }, ...]
-    } catch (e) {
-        console.error("Falha ao parsear mediaItems:", e);
-    }
-}
+            // Leitura de mediaItems (URLs)
+            let mediaItems = [];
+            if (body.mediaItems) {
+                try {
+                    mediaItems = JSON.parse(body.mediaItems);
+                } catch (e) {
+                    console.error("Falha ao parsear mediaItems:", e);
+                }
+            }
 
-// Construir uma lista de "caminhos" remotos (URLs) se houver mediaItems
-let remotePaths = [];
-if (Array.isArray(mediaItems) && mediaItems.length > 0) {
-    remotePaths = mediaItems.map(item => item.url).filter(Boolean);
-}
+            let remotePaths = [];
+            if (Array.isArray(mediaItems) && mediaItems.length > 0) {
+                remotePaths = mediaItems.map(item => item.url).filter(Boolean);
+            }
 
-// Se não houver ficheiros, nem clips, nem URLs em mediaItems → erro
-if (mediaFiles.length === 0 && remotePaths.length === 0 && (!clips || clips.length === 0)) {
-    throw new Error('Nenhum conteúdo (vídeo/imagem) encontrado para processar.');
-}
+            if (mediaFiles.length === 0 && remotePaths.length === 0 && (!clips || clips.length === 0)) {
+                throw new Error('Nenhum conteúdo (vídeo/imagem) encontrado para processar.');
+            }
 
-// Prepara lista de caminhos para processar
-let orderedFilePaths = [];
+            // Construção das paths
+            let orderedFilePaths = [];
 
-// 1) Se tiver clips, tenta casar com arquivos locais ou paths do próprio clips
-if (clips && clips.length > 0) {
-    const filesByName = mediaFiles.reduce((acc, file) => {
-        acc[file.originalname] = file.path;
-        return acc;
-    }, {});
+            if (clips && clips.length > 0) {
+                const filesByName = mediaFiles.reduce((acc, file) => {
+                    acc[file.originalname] = file.path;
+                    return acc;
+                }, {});
 
-    orderedFilePaths = clips
-        .map(c => filesByName[c.originalName] || c.path || c.url)
-        .filter(p => p);
-}
+                orderedFilePaths = clips
+                    .map(c => filesByName[c.originalName] || c.path || c.url)
+                    .filter(p => p);
+            }
 
-// 2) Se ainda estiver vazio, usa arquivos enviados
-if (orderedFilePaths.length === 0 && mediaFiles.length > 0) {
-    orderedFilePaths = mediaFiles.map(f => f.path);
-}
+            if (orderedFilePaths.length === 0 && mediaFiles.length > 0) {
+                orderedFilePaths = mediaFiles.map(f => f.path);
+            }
 
-// 3) Se mesmo assim estiver vazio, usa URLs vindas de mediaItems
-if (orderedFilePaths.length === 0 && remotePaths.length > 0) {
-    orderedFilePaths = remotePaths;
-}
+            if (orderedFilePaths.length === 0 && remotePaths.length > 0) {
+                orderedFilePaths = remotePaths;
+            }
 
-if (orderedFilePaths.length === 0) {
-    throw new Error("Lista final de ficheiros está vazia.");
-}
-
-
-            if (orderedFilePaths.length === 0) throw new Error("Lista final de ficheiros está vazia.");
-
-            const videoClips = [];
+            if (orderedFilePaths.length === 0) {
+                throw new Error("Lista final de ficheiros está vazia.");
+            }
 
             // 2. Normalizar Clips
+            const videoClips = [];
+
             for (let i = 0; i < orderedFilePaths.length; i++) {
                 const filePath = orderedFilePaths[i];
-                // Detecção de tipo mais robusta
-                const isImage = filePath.match(/\.(jpg|jpeg|png|webp)$/i) || 
-                              (clips && clips[i] && clips[i].type === 'image');
-                
+                const isImage = filePath.match(/\.(jpg|jpeg|png|webp)$/i) ||
+                               (clips && clips[i] && clips[i].type === 'image');
+
                 const outputPath = path.join(processedDir, `clip_${jobId}_${i}.mp4`);
                 tempFilesToDelete.push(outputPath);
-                
-                // Normaliza tudo para 1920x1080, 30fps, yuv420p (H.264 padrão)
+
                 if (isImage) {
                     await runFFmpeg(`ffmpeg -loop 1 -i "${filePath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -y "${outputPath}"`);
                 } else {
-                    // Remove áudio do clip original para evitar conflitos na junção
                     await runFFmpeg(`ffmpeg -i "${filePath}" -c:v libx264 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30" -an -y "${outputPath}"`);
                 }
+
                 videoClips.push(outputPath);
             }
 
@@ -493,49 +480,46 @@ if (orderedFilePaths.length === 0) {
             const listContent = videoClips.map(p => `file '${p}'`).join('\n');
             fs.writeFileSync(listPath, listContent);
             tempFilesToDelete.push(listPath);
-            
+
             await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${listPath}" -c copy -y "${silentVideoPath}"`);
 
-          // 4. Mixar Áudio Final
-const finalOutputPath = path.join(processedDir, `timeline_final_${jobId}.mp4`);
+            // -----------------------------
+            // 4. Mixar Áudio Final (CORRIGIDO)
+            // -----------------------------
+            const finalOutputPath = path.join(processedDir, `timeline_final_${jobId}.mp4`);
+            // NÃO adicionar finalOutputPath ao tempFilesToDelete
 
-// ❌ REMOVER — isso apagava o vídeo final
-// tempFilesToDelete.push(finalOutputPath);
-
-await runFFmpeg(`${command} ${audioArgs} -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart -y "${finalOutputPath}"`);
-
-// ❗ GARANTIR que o arquivo final NÃO será apagado
-tempFilesToDelete = tempFilesToDelete.filter(p => p !== finalOutputPath);
-
-jobs[jobId] = {
-    status: 'completed',
-    result: { isFilePath: true, data: finalOutputPath }
-};
-
-            
             let command = `ffmpeg -i "${silentVideoPath}"`;
             let audioArgs = "";
-            
+
             if (audioFile) {
                 command += ` -i "${audioFile.path}"`;
-                audioArgs = `-map 0:v:0 -map 1:a:0 -c:a aac -b:a 128k`; 
+                audioArgs = `-map 0:v:0 -map 1:a:0 -c:a aac -b:a 128k`;
             } else {
-                // Gera silêncio se não houver áudio, para manter o formato válido
                 audioArgs = `-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -map 0:v:0 -map 1:a:0 -c:a aac -shortest`;
             }
-            
-            await runFFmpeg(`${command} ${audioArgs} -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart -y "${finalOutputPath}"`);
 
-            jobs[jobId] = { status: 'completed', result: { isFilePath: true, data: finalOutputPath } };
+            await runFFmpeg(
+                `${command} ${audioArgs} -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart -y "${finalOutputPath}"`
+            );
+
+            // GARANTIR QUE NÃO SERÁ APAGADO
+            tempFilesToDelete = tempFilesToDelete.filter(p => p !== finalOutputPath);
+
+            jobs[jobId] = {
+                status: 'completed',
+                result: { isFilePath: true, data: finalOutputPath }
+            };
 
         } catch (error) {
             console.error(`[Job ${jobId}] Erro:`, error);
             jobs[jobId] = { status: 'failed', error: error.message };
         } finally {
-             safeDeleteFiles(tempFilesToDelete);
+            safeDeleteFiles(tempFilesToDelete);
         }
     });
 });
+
 // --- ROTA PARA DOWNLOAD DO ARQUIVO FINAL ---
 app.get("/download/:jobId", (req, res) => {
     const job = jobs[req.params.jobId];
@@ -547,6 +531,7 @@ app.get("/download/:jobId", (req, res) => {
     console.log("Enviando arquivo:", filePath);
     res.download(filePath);
 });
+
 
 
 // ROTA REAL PARA GERAR MÚSICA COM REPLICATE (ASSÍNCRONA)
@@ -1408,6 +1393,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
