@@ -211,24 +211,29 @@ app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
 });
 
 app.post('/remover-audio', upload.array('videos'), async (req, res) => {
-const allTempFiles = files.map(f => f.path);
-try {
-    const processedFiles = [];
-    for (const file of files) {
-        const outputPath = path.join(processedDir, `processado-${file.filename}`);
-        allTempFiles.push(outputPath);
-        let flags = '-c:v copy';
-        if (req.body.removeAudio === 'true') flags += ' -an';
-        else flags += ' -c:a copy';
-        if (req.body.removeMetadata === 'true') flags += ' -map_metadata -1';
-        await runFFmpeg(`ffmpeg -i "${file.path}" ${flags} -y "${outputPath}"`);
-        processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const processedFiles = [];
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `processado-${file.filename}`);
+            allTempFiles.push(outputPath);
+            let flags = '-c:v copy';
+            if (req.body.removeAudio === 'true') flags += ' -an';
+            else flags += ' -c:a copy';
+            if (req.body.removeMetadata === 'true') flags += ' -map_metadata -1';
+            await runFFmpeg(`ffmpeg -i "${file.path}" ${flags} -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
     }
-    sendZipResponse(res, processedFiles, allTempFiles);
-} catch (e) {
-    safeDeleteFiles(allTempFiles);
-    res.status(500).send(e.message);
-}
+});
+
 // Ferramentas de Áudio
 app.post('/unir-audio', upload.array('videos'), async (req, res) => {
     const files = req.files || [];
@@ -1288,7 +1293,6 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
-
 
 
 
