@@ -496,12 +496,22 @@ if (orderedFilePaths.length === 0) {
             
             await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${listPath}" -c copy -y "${silentVideoPath}"`);
 
-            // 4. Mixar Áudio Final (Re-encoding completo para garantir compatibilidade)
-            tempFilesToDelete.push(finalOutputPath);
-...
-finally {
-    safeDeleteFiles(tempFilesToDelete);
-}
+          // 4. Mixar Áudio Final
+const finalOutputPath = path.join(processedDir, `timeline_final_${jobId}.mp4`);
+
+// ❌ REMOVER — isso apagava o vídeo final
+// tempFilesToDelete.push(finalOutputPath);
+
+await runFFmpeg(`${command} ${audioArgs} -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart -y "${finalOutputPath}"`);
+
+// ❗ GARANTIR que o arquivo final NÃO será apagado
+tempFilesToDelete = tempFilesToDelete.filter(p => p !== finalOutputPath);
+
+jobs[jobId] = {
+    status: 'completed',
+    result: { isFilePath: true, data: finalOutputPath }
+};
+
             
             let command = `ffmpeg -i "${silentVideoPath}"`;
             let audioArgs = "";
@@ -1398,6 +1408,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
