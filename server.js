@@ -1007,7 +1007,7 @@ app.post("/video-info", async (req, res) => {
 // --- ROTAS DO IA TURBO ---
 
 // ** ROTA DE EXTRAÇÃO DE ÁUDIO ATUALIZADA PARA SER ASSÍNCRONA **
-app.post('/extrair-audio', upload.single('video'), (req, res) => {
+app.post('/extrair-audio', upload.any(), (req, res) => {
     const jobId = `audio_job_${Date.now()}`;
     jobs[jobId] = { status: 'pending' };
 
@@ -1299,6 +1299,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
