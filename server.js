@@ -401,33 +401,65 @@ app.post('/render-timeline', upload.any(), (req, res) => {
             jobs[jobId].status = 'processing';
 
             // Tenta ler o payload de várias formas
-            let data = {};
-            if (body.payload) {
-                try { data = JSON.parse(body.payload); } catch(e) {}
-            } else {
-                // Se não tem payload string, assume que o body já é o objeto
-                data = body;
-            }
+let data = {};
+if (body.payload) {
+    try { data = JSON.parse(body.payload); } catch(e) {}
+} else {
+    data = body;
+}
 
-            const { clips } = data;
-            
-            // Se não houver ficheiros nem clips definidos, erro.
-            if (mediaFiles.length === 0 && (!clips || clips.length === 0)) {
-                throw new Error('Nenhum conteúdo (vídeo/imagem) encontrado para processar.');
-            }
+const { clips } = data;
 
-            // Prepara lista de caminhos para processar
-            let orderedFilePaths = [];
-            if (clips && clips.length > 0) {
-                // Se temos metadados de clips, tentamos alinhar com os ficheiros
-                const filesByName = mediaFiles.reduce((acc, file) => { acc[file.originalname] = file.path; return acc; }, {});
-                orderedFilePaths = clips.map(c => filesByName[c.originalName] || c.path).filter(p => p);
-            } 
-            
-            // Fallback: Se a lista ordenada estiver vazia, usa a ordem bruta dos ficheiros
-            if (orderedFilePaths.length === 0) {
-                orderedFilePaths = mediaFiles.map(f => f.path);
-            }
+// NOVO: tentar ler mediaItems (JSON com URLs) vindo do front
+let mediaItems = [];
+if (body.mediaItems) {
+    try {
+        mediaItems = JSON.parse(body.mediaItems); // [{ url, type }, ...]
+    } catch (e) {
+        console.error("Falha ao parsear mediaItems:", e);
+    }
+}
+
+// Construir uma lista de "caminhos" remotos (URLs) se houver mediaItems
+let remotePaths = [];
+if (Array.isArray(mediaItems) && mediaItems.length > 0) {
+    remotePaths = mediaItems.map(item => item.url).filter(Boolean);
+}
+
+// Se não houver ficheiros, nem clips, nem URLs em mediaItems → erro
+if (mediaFiles.length === 0 && remotePaths.length === 0 && (!clips || clips.length === 0)) {
+    throw new Error('Nenhum conteúdo (vídeo/imagem) encontrado para processar.');
+}
+
+// Prepara lista de caminhos para processar
+let orderedFilePaths = [];
+
+// 1) Se tiver clips, tenta casar com arquivos locais ou paths do próprio clips
+if (clips && clips.length > 0) {
+    const filesByName = mediaFiles.reduce((acc, file) => {
+        acc[file.originalname] = file.path;
+        return acc;
+    }, {});
+
+    orderedFilePaths = clips
+        .map(c => filesByName[c.originalName] || c.path || c.url)
+        .filter(p => p);
+}
+
+// 2) Se ainda estiver vazio, usa arquivos enviados
+if (orderedFilePaths.length === 0 && mediaFiles.length > 0) {
+    orderedFilePaths = mediaFiles.map(f => f.path);
+}
+
+// 3) Se mesmo assim estiver vazio, usa URLs vindas de mediaItems
+if (orderedFilePaths.length === 0 && remotePaths.length > 0) {
+    orderedFilePaths = remotePaths;
+}
+
+if (orderedFilePaths.length === 0) {
+    throw new Error("Lista final de ficheiros está vazia.");
+}
+
 
             if (orderedFilePaths.length === 0) throw new Error("Lista final de ficheiros está vazia.");
 
@@ -1350,6 +1382,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
