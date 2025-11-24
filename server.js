@@ -522,6 +522,18 @@ if (orderedFilePaths.length === 0) {
         }
     });
 });
+// --- ROTA PARA DOWNLOAD DO ARQUIVO FINAL ---
+app.get("/download/:jobId", (req, res) => {
+    const job = jobs[req.params.jobId];
+    if (!job || job.status !== "completed") {
+        return res.status(404).json({ error: "Job não encontrado ou não está pronto." });
+    }
+
+    const filePath = job.result.data;
+    console.log("Enviando arquivo:", filePath);
+    res.download(filePath);
+});
+
 
 // ROTA REAL PARA GERAR MÚSICA COM REPLICATE (ASSÍNCRONA)
 app.post('/gerar-musica', upload.array('videos'), async (req, res) => {
@@ -1382,6 +1394,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
