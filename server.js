@@ -37,7 +37,13 @@ const storage = multer.diskStorage({
     }
 });
 
-const upload = multer({ storage: storage });
+// Configuração relaxada do Multer com limite aumentado para campos de texto
+const upload = multer({ 
+    storage: storage,
+    limits: {
+        fieldSize: 50 * 1024 * 1024 // Aumenta o limite para 50MB (resolve o erro Field value too long)
+    }
+});
 
 // 4. Funções Auxiliares
 function runFFmpeg(command) {
@@ -1323,6 +1329,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
