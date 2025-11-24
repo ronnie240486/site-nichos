@@ -238,6 +238,32 @@ app.post('/remover-audio', upload.array('videos'), async (req, res) => {
     }
 });   //  <-- MUITA GENTE ESQUECE ESTE
 
+app.post('/cortar-video', upload.any(), async (req, res) => {
+    const files = req.files || [];
+    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
+    
+    const allTempFiles = files.map(f => f.path);
+    try {
+        const { startTime, endTime } = req.body;
+        if (!startTime || !endTime) {
+            throw new Error('Tempos de início e fim são obrigatórios (ex: 00:00:10).');
+        }
+
+        const processedFiles = [];
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `cortado-${file.filename}`);
+            allTempFiles.push(outputPath);
+            // Usa -c copy para ser rápido (sem re-codificar)
+            await runFFmpeg(`ffmpeg -i "${file.path}" -ss ${startTime} -to ${endTime} -c copy -y "${outputPath}"`);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
+        sendZipResponse(res, processedFiles, allTempFiles);
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
+    }
+});
+
 
 
 // Ferramentas de Áudio
@@ -1307,6 +1333,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
