@@ -373,60 +373,62 @@ app.post('/remover-silencio', upload.array('videos'), async (req, res) => {
         res.status(500).send(e.message);
     }
 });
-// --- ROTA CORRIGIDA: EDITOR DE VÍDEO COM TIMELINE ---
+// --- ROTA CORRIGIDA: EDITOR DE VÍDEO (TIMELINE) ---
 app.post('/render-timeline', upload.any(), (req, res) => {
     const jobId = `timeline_${Date.now()}`;
     jobs[jobId] = { status: 'pending' };
-    res.json({ success: true, jobId }); // Responde rápido para não travar
+    res.json({ success: true, jobId }); // Resposta imediata
 
     setImmediate(async () => {
-        // Recupera ficheiros com upload.any()
-        const mediaFiles = req.files ? req.files.filter(f => f.fieldname === 'media') : [];
-        const audioFile = req.files ? req.files.find(f => f.fieldname === 'audio') : null;
+        // 1. Captura Segura dos Ficheiros
+        const mediaFiles = req.files ? req.files.filter(f => f.fieldname === 'media' || f.fieldname === 'videos' || f.fieldname === 'video') : [];
+        const audioFile = req.files ? req.files.find(f => f.fieldname === 'audio' || f.fieldname === 'narration') : null;
         const { payload } = req.body;
         
         let allTempFiles = req.files ? req.files.map(f => f.path) : [];
 
         try {
-            if (!payload && mediaFiles.length === 0) throw new Error('Dados da timeline ou ficheiros em falta.');
+            // Se não há payload JSON, assume modo simples (apenas juntar vídeos enviados)
+            if (!payload && mediaFiles.length === 0) throw new Error('Nenhum vídeo ou imagem enviado.');
             
             jobs[jobId].status = 'processing';
-            const data = JSON.parse(payload || '{}');
-            const { clips, settings } = data;
+            const data = payload ? JSON.parse(payload) : {};
+            const { clips } = data; // settings removido se não usado
 
-            // Mapeia ficheiros para garantir ordem
-            const filesByName = mediaFiles.reduce((acc, file) => {
-                acc[file.originalname] = file.path;
-                return acc;
-            }, {});
-            
-            // Se houver clips definidos no JSON, usa-os; senão usa a ordem do upload
-            const orderedFilePaths = (clips && clips.length > 0) 
-                ? clips.map(c => filesByName[c.originalName] || mediaFiles[0].path)
-                : mediaFiles.map(f => f.path);
+            // Define quais ficheiros processar e em que ordem
+            let orderedFilePaths = [];
+            if (clips && clips.length > 0) {
+                // Modo Avançado (com JSON de ordem)
+                const filesByName = mediaFiles.reduce((acc, file) => { acc[file.originalname] = file.path; return acc; }, {});
+                orderedFilePaths = clips.map(c => filesByName[c.originalName]).filter(p => p); // Filtra nulos
+            } else {
+                // Modo Simples (usa a ordem do upload)
+                orderedFilePaths = mediaFiles.map(f => f.path);
+            }
+
+            if (orderedFilePaths.length === 0) throw new Error("Nenhum ficheiro válido encontrado para processar.");
 
             const videoClips = [];
 
-            // 1. Normalizar Clips (Imagens -> Vídeo / Vídeos -> Padrão)
+            // 2. Normalizar Clips (Converte tudo para 1080p MP4)
             for (let i = 0; i < orderedFilePaths.length; i++) {
                 const filePath = orderedFilePaths[i];
-                // Detecta se é imagem pela extensão ou metadados do clip
-                const isImage = filePath.match(/\.(jpg|jpeg|png|webp)$/i) || (clips && clips[i] && clips[i].type === 'image');
+                const isImage = filePath.match(/\.(jpg|jpeg|png|webp)$/i); // Deteção simples por extensão
                 
                 const outputPath = path.join(processedDir, `clip_${jobId}_${i}.mp4`);
                 allTempFiles.push(outputPath);
                 
                 if (isImage) {
-                    // Converte imagem estática em vídeo de 5s
+                    // Imagem vira vídeo de 5s
                     await runFFmpeg(`ffmpeg -loop 1 -i "${filePath}" -c:v libx264 -t 5 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -y "${outputPath}"`);
                 } else {
-                    // Normaliza vídeo para 1080p e remove áudio original para evitar conflitos na junção
+                    // Vídeo é normalizado (remove áudio original para evitar conflito na concatenação simples)
                     await runFFmpeg(`ffmpeg -i "${filePath}" -c:v libx264 -pix_fmt yuv420p -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1" -an -y "${outputPath}"`);
                 }
                 videoClips.push(outputPath);
             }
 
-            // 2. Concatenar Vídeos
+            // 3. Concatenar Vídeos
             const silentVideoPath = path.join(processedDir, `timeline_silent_${jobId}.mp4`);
             allTempFiles.push(silentVideoPath);
 
@@ -437,7 +439,7 @@ app.post('/render-timeline', upload.any(), (req, res) => {
             
             await runFFmpeg(`ffmpeg -f concat -safe 0 -i "${listPath}" -c copy -y "${silentVideoPath}"`);
 
-            // 3. Mixar Áudio Final (A CORREÇÃO CRÍTICA ESTÁ AQUI)
+            // 4. Mixar Áudio Final (CORREÇÃO: Sem -shortest e com -movflags)
             const finalOutputPath = path.join(processedDir, `timeline_final_${jobId}.mp4`);
             
             let command = `ffmpeg -i "${silentVideoPath}"`;
@@ -445,27 +447,29 @@ app.post('/render-timeline', upload.any(), (req, res) => {
             
             if (audioFile) {
                 command += ` -i "${audioFile.path}"`;
-                // Mapeia vídeo do 0 e áudio do 1. Re-codifica áudio para AAC.
-                audioArgs = `-map 0:v:0 -map 1:a:0 -c:a aac -b:a 128k -shortest`;
-            } else {
-                // Sem áudio
-                audioArgs = `-c:a copy`; 
+                // Adiciona áudio. Se o áudio for menor que o vídeo, o vídeo continua mudo (comportamento padrão).
+                // Se quiser cortar o vídeo pelo áudio, adicione -shortest de volta.
+                audioArgs = `-map 0:v:0 -map 1:a:0 -c:a aac -b:a 128k`; 
             }
             
-            // CORREÇÃO: Usar '-c:v libx264' (re-codificar) em vez de '-c:v copy'
-            // Isso garante que o vídeo final tenha timestamps corretos e seja reproduzível.
-            await runFFmpeg(`${command} ${audioArgs} -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -y "${finalOutputPath}"`);
+            // -movflags +faststart é essencial para o vídeo tocar no navegador enquanto carrega
+            await runFFmpeg(`${command} ${audioArgs} -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart -y "${finalOutputPath}"`);
 
             // Sucesso
             jobs[jobId] = { status: 'completed', result: { isFilePath: true, data: finalOutputPath } };
 
         } catch (error) {
-            console.error('Erro no render-timeline:', error);
+            console.error(`[Job ${jobId}] Erro render-timeline:`, error);
             jobs[jobId] = { status: 'failed', error: error.message };
         } finally {
-            // Limpeza de ficheiros temporários
-            if (jobs[jobId]?.status === 'failed') safeDeleteFiles(allTempFiles);
-             else safeDeleteFiles(allTempFiles); // Limpa tudo, o vídeo final está salvo em data
+            // Limpeza inteligente: mantém o resultado final se houve sucesso
+            if (jobs[jobId]?.status === 'completed') {
+                // Remove tudo exceto o output final (que será enviado ao utilizador)
+                // Nota: O caminho final não está em allTempFiles, então podemos apagar allTempFiles com segurança
+                safeDeleteFiles(allTempFiles);
+            } else {
+                safeDeleteFiles(allTempFiles);
+            }
         }
     });
 });
@@ -1329,6 +1333,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
