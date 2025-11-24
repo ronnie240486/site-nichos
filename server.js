@@ -1010,40 +1010,48 @@ app.post("/video-info", async (req, res) => {
 app.post('/extrair-audio', upload.any(), (req, res) => {
     const jobId = `audio_job_${Date.now()}`;
     jobs[jobId] = { status: 'pending' };
+    res.json({ success: true, jobId });
 
-    res.json({ success: true, jobId: jobId });
+    // 1. Captura os dados IMEDIATAMENTE (antes do processo de fundo)
+    // Isto previne que os dados se percam na troca de contexto
+    const body = req.body || {};
+    const files = req.files || [];
+    const file = files.find(f => f.fieldname === 'video' || f.fieldname === 'videos') || files[0];
 
     setImmediate(async () => {
         let videoPath = null;
         let allTempFiles = [];
-        if (req.file) allTempFiles.push(req.file.path);
+        if (file) allTempFiles.push(file.path);
 
         try {
             jobs[jobId].status = 'processing';
-            if (req.file) {
-                videoPath = req.file.path;
-            } else if (req.body.url) {
-                const videoUrl = req.body.url;
-                videoPath = path.join(uploadDir, `download_audio_${jobId}.mp4`);
+            
+            // Log para debug no terminal do Railway
+            console.log(`[Job ${jobId}] Processando. URL: ${body.url ? 'Sim' : 'Não'}, Ficheiro: ${file ? 'Sim' : 'Não'}`);
+
+            if (file) {
+                videoPath = file.path;
+            } else if (body.url) {
+                const videoUrl = body.url;
+                videoPath = path.join(uploadDir, `dl_${jobId}.mp4`);
                 allTempFiles.push(videoPath);
                 await youtubedl.exec(videoUrl, { output: videoPath, format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' });
             } else {
-                throw new Error('Nenhum ficheiro ou URL enviado.');
+                throw new Error('Nenhum ficheiro ou URL detetado no servidor.');
             }
 
-            const outputPath = path.join(processedDir, `audio-ext-${jobId}.wav`);
-            allTempFiles.push(outputPath);
+            const outputPath = path.join(processedDir, `audio_${jobId}.wav`);
             await runFFmpeg(`ffmpeg -i "${videoPath}" -vn -acodec pcm_s16le -ar 16000 -ac 1 -y "${outputPath}"`);
             
             jobs[jobId] = { status: 'completed', result: { isFilePath: true, data: outputPath } };
             
-            // Limpa apenas o vídeo de input; o ficheiro de áudio será limpo após o download
+            // Limpa ficheiros temporários (exceto o resultado)
             safeDeleteFiles(allTempFiles.filter(f => f !== outputPath));
 
         } catch (e) {
-            console.error(`[Job ${jobId}] Erro ao extrair áudio: ${e.message}`);
+            console.error(`[Job ${jobId}] Erro:`, e.message);
             jobs[jobId] = { status: 'failed', error: e.message };
-            safeDeleteFiles(allTempFiles); // Limpa tudo em caso de erro
+            safeDeleteFiles(allTempFiles);
         }
     });
 });
@@ -1299,6 +1307,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
