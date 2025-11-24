@@ -382,6 +382,9 @@ app.post('/render-timeline', upload.any(), (req, res) => {
     // 1. CAPTURA DE DADOS IMEDIATA (Blindagem contra perda de dados)
     const files = req.files || [];
     const body = req.body || {};
+    console.log("REQ.FILES ===>", req.files);
+    console.log("REQ.BODY ===>", req.body);
+
 
     // Tenta encontrar áudio em qualquer campo possível
     const audioFile = files.find(f => f.fieldname === 'audio' || f.fieldname === 'narration' || f.mimetype.startsWith('audio/'));
@@ -1347,6 +1350,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
