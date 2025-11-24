@@ -211,43 +211,33 @@ app.post('/embaralhar-videos', upload.array('videos'), async (req, res) => {
 });
 
 app.post('/remover-audio', upload.array('videos'), async (req, res) => {
-    const files = req.files || [];
-    if (files.length === 0) return res.status(400).send('Nenhum ficheiro enviado.');
-
     const allTempFiles = [...files.map(f => f.path)];
 
-try {
-    const processedFiles = [];
+    try {
+        const processedFiles = [];
 
-    const removeAudio = req.body.removeAudio === 'true';
-    const removeMetadata = req.body.removeMetadata === 'true';
+        for (const file of files) {
+            const outputPath = path.join(processedDir, `processado-${file.filename}`);
+            allTempFiles.push(outputPath);
 
-    for (const file of files) {
-        const outputPath = path.join(processedDir, `processado-${file.filename}`);
-        allTempFiles.push(outputPath);
+            let flags = '-c:v copy';
+            if (req.body.removeAudio === 'true') flags += ' -an';
+            else flags += ' -c:a copy';
+            if (req.body.removeMetadata === 'true') flags += ' -map_metadata -1';
 
-        // Montagem das flags de forma mais segura
-        const flags = [
-            '-c:v copy',                     // copiar vídeo sem reencodar
-            removeAudio ? '-an' : '-c:a copy', // remover áudio ou copiar
-            removeMetadata ? '-map_metadata -1' : '' // remover metadados
-        ].filter(Boolean).join(' ');
+            await runFFmpeg(`ffmpeg -i "${file.path}" ${flags} -y "${outputPath}"`);
 
-        const command = `ffmpeg -i "${file.path}" ${flags} -y "${outputPath}"`;
-        await runFFmpeg(command);
+            processedFiles.push({ path: outputPath, name: path.basename(outputPath) });
+        }
 
-        processedFiles.push({
-            path: outputPath,
-            name: path.basename(outputPath)
-        });
+        sendZipResponse(res, processedFiles, allTempFiles);
+
+    } catch (e) {
+        safeDeleteFiles(allTempFiles);
+        res.status(500).send(e.message);
     }
+});   //  <-- MUITA GENTE ESQUECE ESTE
 
-    sendZipResponse(res, processedFiles, allTempFiles);
-
-} catch (e) {
-    safeDeleteFiles(allTempFiles);
-    res.status(500).send(e.message || 'Erro ao processar ficheiros.');
-}
 
 
 // Ferramentas de Áudio
@@ -1309,6 +1299,7 @@ app.post('/mixar-video-turbo-advanced', upload.single('narration'), (req, res) =
 app.listen(PORT, () => {
     console.log(`Servidor a correr na porta ${PORT}`);
 });
+
 
 
 
